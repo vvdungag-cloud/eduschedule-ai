@@ -1,0 +1,74 @@
+{
+  "entities": {
+    "School": {
+      "title": "School",
+      "description": "Multi-tenant root entity representing a specific high school",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique slugified school ID (e.g. thpt-nguyen-binh-khiem)" },
+        "name": { "type": "string", "description": "Full formal name of the school" },
+        "departmentName": { "type": "string", "description": "Department or Bureau of Education governing the school" },
+        "availableYears": { "type": "array", "description": "List of academic school years available" },
+        "currentAcademicYear": { "type": "string", "description": "Current active academic school year" },
+        "currentSemester": { "type": "string", "description": "Current active school semester" },
+        "schoolInfo": { "type": "object", "description": "Metadata regarding circular, principal, weeks" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "lastUpdatedBy": { "type": "string" }
+      },
+      "required": ["id", "name"]
+    },
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Account credential with RBAC permission role for a specific school",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "username": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "subadmin", "viewer"] },
+        "displayName": { "type": "string" },
+        "department": { "type": "string" },
+        "passwordHash": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "notes": { "type": "string" }
+      },
+      "required": ["id", "username", "role", "displayName"]
+    },
+    "TermData": {
+      "title": "TermData",
+      "description": "Comprehensive teaching assignment and timetable data for an academic term",
+      "type": "object",
+      "properties": {
+        "termKey": { "type": "string", "description": "Identifier for the semester (e.g. 2025_2026_HK1)" },
+        "academicYear": { "type": "string" },
+        "semester": { "type": "string" },
+        "teachers": { "type": "array" },
+        "classes": { "type": "array" },
+        "subjectsConfig": { "type": "array" },
+        "classSubjectPeriods": { "type": "object" },
+        "classThreeConsecutivePeriods": { "type": "object" },
+        "assignments": { "type": "object" },
+        "timetableData": { "type": "object" },
+        "timetableLockedSlots": { "type": "object" },
+        "sessionMode": { "type": "string" },
+        "afternoonPeriodsCount": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "lastUpdatedBy": { "type": "string" }
+      },
+      "required": ["termKey", "academicYear", "semester"]
+    }
+  },
+  "firestore": {
+    "/schools/{schoolId}": {
+      "schema": "School",
+      "description": "Metadata and global settings for an individual school tenant"
+    },
+    "/schools/{schoolId}/accounts/{accountId}": {
+      "schema": "UserAccount",
+      "description": "User accounts and role permissions belonging to this school"
+    },
+    "/schools/{schoolId}/terms/{termKey}": {
+      "schema": "TermData",
+      "description": "Assignments, teachers, classes, and timetable for a specific term at this school"
+    }
+  }
+}

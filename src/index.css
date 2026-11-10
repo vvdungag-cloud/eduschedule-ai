@@ -1,0 +1,269 @@
+@import "tailwindcss";
+
+:root {
+  font-family: 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+@media print {
+  /* Khởi tạo ẩn tất cả các phần tử trên trang */
+  body * {
+    visibility: hidden !important;
+  }
+  
+  /* Chỉ hiển thị duy nhất khu vực tài liệu cần in */
+  .printable-document,
+  .printable-document *,
+  #timetable-printable-container,
+  #timetable-printable-container *,
+  .print-container,
+  .print-container * {
+    visibility: visible !important;
+  }
+  
+  /* Cấu hình vị trí tài liệu cần in đè lên toàn bộ trang giấy, loại bỏ triệt để mọi giới hạn độ rộng */
+  .printable-document,
+  #timetable-printable-container,
+  .print-container {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+
+  table,
+  table.tkb-table,
+  table.print-table {
+    width: 100% !important;
+    max-width: 100% !important;
+    table-layout: fixed !important;
+    border-collapse: collapse !important;
+    margin: 0 auto !important;
+    page-break-inside: auto;
+  }
+
+  tr {
+    page-break-inside: avoid;
+    page-break-after: auto;
+  }
+
+  th, td {
+    border: 1px solid #333333 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  th {
+    background-color: #f1f5f9 !important;
+  }
+
+  .page-break {
+    page-break-after: always !important;
+    break-after: page !important;
+  }
+
+  /* Đảm bảo ô dữ liệu Thời khóa biểu Toàn trường không bị ép xẹp hay cắt chữ */
+  td.schedule-cell {
+    min-height: 42px !important;
+    height: auto !important;
+    overflow: visible !important;
+    padding: 2px 1px !important;
+    box-sizing: border-box !important;
+    vertical-align: middle !important;
+  }
+
+  td.schedule-cell .cell-inner,
+  td.schedule-cell > div {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+    width: 100% !important;
+    height: 100% !important;
+    min-height: 38px !important;
+    overflow: visible !important;
+  }
+
+  td.schedule-cell .subject-name {
+    font-size: 10.5px !important;
+    font-weight: 700 !important;
+    line-height: 1.2 !important;
+    color: #0f172a !important;
+    word-break: break-word !important;
+    text-align: center !important;
+  }
+
+  /* Căn giữa ô dữ liệu Thời khóa biểu theo Giáo viên */
+  td.teacher-schedule-cell {
+    vertical-align: middle !important;
+    text-align: center !important;
+    height: 38px !important;
+    padding: 0 !important;
+    box-sizing: border-box !important;
+  }
+
+  td.teacher-schedule-cell .class-name-badge,
+  td.teacher-schedule-cell > div {
+    display: flex !important;
+    align-items: center !important;     /* Căn chính giữa theo chiều DỌC */
+    justify-content: center !important; /* Căn chính giữa theo chiều NGANG */
+    height: 100% !important;
+    width: 100% !important;
+    margin: 0 auto !important;
+    font-size: 10.5px !important;
+    font-weight: 700 !important;
+    color: #0f172a !important;
+    line-height: 1 !important;
+    text-align: center !important;
+  }
+
+  /* Căn giữa ô dữ liệu Thời khóa biểu theo Tổ Bộ môn (Sáng & Chiều) */
+  td.subject-matrix-cell {
+    height: 27px !important;
+    padding: 0 !important;
+    vertical-align: middle !important;
+    text-align: center !important;
+    box-sizing: border-box !important;
+  }
+
+  td.subject-matrix-cell > div {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    height: 100% !important;
+    width: 100% !important;
+    margin: 0 auto !important;
+    text-align: center !important;
+  }
+
+  td.subject-matrix-cell span {
+    font-size: 8.8px !important;
+    font-weight: 700 !important;
+    color: #0f172a !important;
+    line-height: 1 !important;
+    text-align: center !important;
+  }
+
+  @page {
+    size: A4 landscape;
+    margin: 5mm 6mm;
+  }
+}
+
+/* ==========================================================================
+   CHUẨN HÓA IN ẤN & XUẤT THỜI KHÓA BIỂU
+   ========================================================================== */
+.print-container {
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 auto;
+}
+
+table.print-table,
+table.tkb-table {
+  width: 100% !important;
+  max-width: 100% !important;
+  table-layout: fixed !important;
+  border-collapse: collapse !important;
+  margin: 0 auto;
+}
+
+td.schedule-cell {
+  min-height: 42px !important;
+  height: auto !important;
+  overflow: visible !important;
+  padding: 2px 1px !important;
+  box-sizing: border-box !important;
+  vertical-align: middle !important;
+}
+
+td.schedule-cell .cell-inner,
+td.schedule-cell > div {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  text-align: center !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 38px !important;
+  overflow: visible !important;
+}
+
+td.schedule-cell .subject-name {
+  font-size: 10.5px !important;
+  font-weight: 700 !important;
+  line-height: 1.2 !important;
+  color: #0f172a !important;
+  word-break: break-word !important;
+  text-align: center !important;
+}
+
+td.teacher-schedule-cell {
+  vertical-align: middle !important;
+  text-align: center !important;
+  height: 38px !important;
+  padding: 0 !important;
+  box-sizing: border-box !important;
+}
+
+td.teacher-schedule-cell .class-name-badge,
+td.teacher-schedule-cell > div {
+  display: flex !important;
+  align-items: center !important;     /* Căn chính giữa theo chiều DỌC */
+  justify-content: center !important; /* Căn chính giữa theo chiều NGANG */
+  height: 100% !important;
+  width: 100% !important;
+  margin: 0 auto !important;
+  font-size: 10.5px !important;
+  font-weight: 700 !important;
+  color: #0f172a !important;
+  line-height: 1 !important;
+  text-align: center !important;
+}
+
+td.subject-matrix-cell {
+  height: 27px !important;
+  padding: 0 !important;
+  vertical-align: middle !important;
+  text-align: center !important;
+  box-sizing: border-box !important;
+}
+
+td.subject-matrix-cell > div {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  height: 100% !important;
+  width: 100% !important;
+  margin: 0 auto !important;
+  text-align: center !important;
+}
+
+td.subject-matrix-cell span {
+  font-size: 8.8px !important;
+  font-weight: 700 !important;
+  color: #0f172a !important;
+  line-height: 1 !important;
+  text-align: center !important;
+}
+
+.page-break {
+  page-break-after: always;
+  break-after: page;
+}
+
+/* Ẩn hoàn toàn scrollbar trên mọi trình duyệt (Firefox, IE/Edge, Webkit/Chrome/Safari) */
+.no-scrollbar {
+  scrollbar-width: none !important; /* Firefox */
+  -ms-overflow-style: none !important; /* IE and Edge */
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none !important; /* Chrome, Safari and Opera */
+  width: 0 !important;
+  height: 0 !important;
+}

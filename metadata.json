@@ -1,0 +1,6 @@
+{
+  "name": "EduSchedule AI",
+  "description": "Hệ thống hỗ trợ phân công giáo viên chủ nhiệm và lập thời khóa biểu THPT thông minh bằng AI",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
