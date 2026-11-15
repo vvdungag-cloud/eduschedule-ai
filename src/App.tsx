@@ -7,7 +7,7 @@ import {
   Pencil, ArrowUpDown, ArrowUp, ArrowDown, Search, BarChart3,
   FileSpreadsheet, FileText, FileDown, Upload, Calendar, CalendarDays, FolderArchive, Clock,
   Lock, Unlock, Save, Layers, KeyRound, ShieldCheck, Cloud, Shield, ClipboardList,
-  Sun, Moon, Calculator, Zap, Table
+  Sun, Moon, Calculator, Zap, Table, LogOut
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { 
@@ -7025,146 +7025,183 @@ export default function App() {
         style={{
           background: 'linear-gradient(90deg, #0b2447 0%, #19376d 50%, #0b2447 100%)',
           borderBottom: '1px solid rgba(6, 182, 212, 0.3)',
-          boxShadow: '0 4px 20px -2px rgba(11, 36, 71, 0.35)',
-          height: '64px',
-          padding: '0 28px'
+          boxShadow: '0 4px 20px -2px rgba(11, 36, 71, 0.35)'
         }}
-        className="text-white print:hidden sticky top-0 z-30 flex items-center justify-between"
+        className="text-white print:hidden sticky top-0 z-30 md:h-16 md:px-7 flex items-center"
       >
-        <div className={`mx-auto w-full h-full flex items-center justify-between gap-4 transition-all duration-200 ${
+        <div className={`mx-auto w-full flex flex-col md:flex-row md:items-center md:justify-between gap-2 py-2 px-3 md:py-0 md:px-0 transition-all duration-200 ${
           isBoardFullscreen && activeTab === 'board' ? 'max-w-none' : 'max-w-7xl'
         }`}>
-          {/* Logo & School Name */}
-          <div 
-            onClick={() => setActiveTab('welcome')}
-            className="flex items-center gap-3.5 min-w-0 cursor-pointer select-none group"
-            title="Về màn hình chính (Trang chủ)"
-          >
+          {/* Tầng 1 trên Mobile: Logo + EduSchedule AI (trái) & Cụm tài khoản thu gọn (phải) */}
+          <div className="w-full md:w-auto flex items-center justify-between gap-2 min-w-0">
+            {/* Logo & School Name */}
             <div 
-              style={{
-                width: '46px',
-                height: '46px',
-                border: '2px solid #ffffff',
-                boxShadow: '0 0 10px rgba(16, 185, 129, 0.5)',
-                borderRadius: '9999px'
-              }}
-              className="shrink-0 flex items-center justify-center overflow-hidden bg-white transition-transform group-hover:scale-105"
-              title="Logo Trường THPT Nguyễn Bỉnh Khiêm (An Giang)"
+              onClick={() => setActiveTab('welcome')}
+              className="flex items-center gap-2.5 md:gap-3.5 min-w-0 cursor-pointer select-none group"
+              title="Về màn hình chính (Trang chủ)"
             >
-              <SchoolLogo 
-                customLogo={customLogo} 
-                alt="Logo Trường THPT Nguyễn Bỉnh Khiêm (An Giang)" 
-                style={{ width: '42px', height: '42px' }}
-                className="rounded-full object-contain shrink-0"
-              />
-            </div>
-            <div className="min-w-0 flex flex-col justify-center">
-              <div className="flex items-center gap-2">
-                <span 
-                  style={{
-                    fontSize: '28px',
-                    fontWeight: 900,
-                    lineHeight: 1,
-                    color: '#ffffff',
-                    WebkitTextStroke: '1.2px #10b981',
-                    textShadow: '0 0 12px rgba(16, 185, 129, 0.7), 0 2px 4px rgba(0,0,0,0.5)',
-                    paintOrder: 'stroke fill'
-                  }}
-                  className="tracking-tight select-none"
-                >
-                  EduSchedule
-                </span>
-                <span 
-                  style={{
-                    background: 'linear-gradient(135deg, #10b981, #06b6d4)',
-                    fontSize: '11px',
-                    fontWeight: 800,
-                    padding: '2px 7px',
-                    borderRadius: '6px',
-                    color: '#ffffff',
-                    border: '1px solid rgba(255,255,255,0.4)',
-                    boxShadow: '0 2px 6px rgba(16, 185, 129, 0.35)',
-                    lineHeight: 1
-                  }}
-                  className="tracking-wider inline-block shrink-0"
-                >
-                  AI
-                </span>
-              </div>
               <div 
                 style={{
-                  fontSize: '11.5px',
-                  fontWeight: 700,
-                  color: '#6ee7b7',
-                  letterSpacing: '1px',
-                  textTransform: 'uppercase',
-                  marginTop: '2px'
+                  border: '2px solid #ffffff',
+                  boxShadow: '0 0 10px rgba(16, 185, 129, 0.5)',
+                  borderRadius: '9999px'
                 }}
-                className="truncate max-w-[200px] sm:max-w-xs md:max-w-sm tracking-wide" 
-                title={schoolInfo.schoolName ? schoolInfo.schoolName.replace(/^TRƯỜNG\s+/, '') : 'THPT NGUYỄN BỈNH KHIÊM'}
+                className="w-8 h-8 md:w-[46px] md:h-[46px] shrink-0 flex items-center justify-center overflow-hidden bg-white transition-transform group-hover:scale-105"
+                title="Logo Trường THPT Nguyễn Bỉnh Khiêm (An Giang)"
               >
-                {schoolInfo.schoolName ? schoolInfo.schoolName.replace(/^TRƯỜNG\s+/, '') : 'THPT NGUYỄN BỈNH KHIÊM'}
+                <SchoolLogo 
+                  customLogo={customLogo} 
+                  alt="Logo Trường THPT Nguyễn Bỉnh Khiêm (An Giang)" 
+                  className="w-7 h-7 md:w-[42px] md:h-[42px] rounded-full object-contain shrink-0"
+                />
               </div>
+              <div className="min-w-0 flex flex-col justify-center">
+                {/* Mobile title (< 768px): luôn hiển thị rõ ràng, không bị đè hoặc ẩn */}
+                <span className="md:hidden text-base font-bold text-white tracking-tight truncate select-none">
+                  EduSchedule AI
+                </span>
+
+                {/* Desktop title (>= 768px): giữ nguyên giao diện gốc */}
+                <div className="hidden md:flex items-center gap-2">
+                  <span 
+                    style={{
+                      fontSize: '28px',
+                      fontWeight: 900,
+                      lineHeight: 1,
+                      color: '#ffffff',
+                      WebkitTextStroke: '1.2px #10b981',
+                      textShadow: '0 0 12px rgba(16, 185, 129, 0.7), 0 2px 4px rgba(0,0,0,0.5)',
+                      paintOrder: 'stroke fill'
+                    }}
+                    className="tracking-tight select-none"
+                  >
+                    EduSchedule
+                  </span>
+                  <span 
+                    style={{
+                      background: 'linear-gradient(135deg, #10b981, #06b6d4)',
+                      fontSize: '11px',
+                      fontWeight: 800,
+                      padding: '2px 7px',
+                      borderRadius: '6px',
+                      color: '#ffffff',
+                      border: '1px solid rgba(255,255,255,0.4)',
+                      boxShadow: '0 2px 6px rgba(16, 185, 129, 0.35)',
+                      lineHeight: 1
+                    }}
+                    className="tracking-wider inline-block shrink-0"
+                  >
+                    AI
+                  </span>
+                </div>
+                <div 
+                  style={{
+                    fontSize: '11.5px',
+                    fontWeight: 700,
+                    color: '#6ee7b7',
+                    letterSpacing: '1px',
+                    textTransform: 'uppercase',
+                    marginTop: '2px'
+                  }}
+                  className="hidden md:block truncate max-w-xs lg:max-w-sm tracking-wide" 
+                  title={schoolInfo.schoolName ? schoolInfo.schoolName.replace(/^TRƯỜNG\s+/, '') : 'THPT NGUYỄN BỈNH KHIÊM'}
+                >
+                  {schoolInfo.schoolName ? schoolInfo.schoolName.replace(/^TRƯỜNG\s+/, '') : 'THPT NGUYỄN BỈNH KHIÊM'}
+                </div>
+              </div>
+            </div>
+
+            {/* Cụm nút Tài khoản & Hành động thu gọn trên Mobile (< 768px) */}
+            <div className="flex md:hidden items-center gap-1.5 shrink-0">
+              {currentUser && role !== 'GUEST' && (
+                <button
+                  type="button"
+                  onClick={openLoginModal}
+                  className={`inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-md font-bold uppercase tracking-wider shrink-0 cursor-pointer active:scale-95 transition ${
+                    role === 'ADMIN'
+                      ? 'bg-amber-400 text-amber-950 font-black'
+                      : role === 'HEAD_OF_DEPARTMENT'
+                      ? 'bg-indigo-300 text-indigo-950'
+                      : 'bg-emerald-300 text-emerald-950'
+                  }`}
+                  title={`Vai trò: ${role}. Bấm để mở bảng tài khoản & quản trị.`}
+                >
+                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-600 shrink-0"></span>
+                  <span>{role === 'ADMIN' ? 'ADMIN' : role === 'HEAD_OF_DEPARTMENT' ? 'TỔ TRƯỞNG' : 'GV'}</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setIsUserGuideModalOpen(true)}
+                className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 border border-emerald-400/40 text-emerald-200 transition active:scale-95 cursor-pointer shrink-0"
+                title="Hướng dẫn sử dụng & Phím tắt (Phím tắt: F1 hoặc ?)"
+                aria-label="Hướng dẫn sử dụng"
+              >
+                <HelpCircle className="w-4 h-4" />
+              </button>
+
+              {currentUser && role !== 'GUEST' && isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => setIsSettingsModalOpen(true)}
+                  className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 border border-white/20 text-emerald-300 transition active:scale-95 cursor-pointer shrink-0"
+                  title="Cài đặt hệ thống & Thông tin trường học"
+                  aria-label="Cài đặt hệ thống"
+                >
+                  <Settings className="w-4 h-4" />
+                </button>
+              )}
+
+              {currentUser && role !== 'GUEST' && (
+                <button
+                  type="button"
+                  onClick={() => logout('Bạn đã đăng xuất khỏi hệ thống.', 'info')}
+                  className="p-1.5 rounded-lg bg-white/10 hover:bg-rose-500/25 border border-white/20 text-rose-300 transition active:scale-95 cursor-pointer shrink-0"
+                  title="Đăng xuất khỏi tài khoản"
+                  aria-label="Đăng xuất"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              )}
             </div>
           </div>
 
-          {/* Academic Year & Semester Selector (Glassmorphism) */}
-          <div className="flex items-center gap-2 shrink-0">
+          {/* Tầng 2 trên Mobile (trải rộng toàn chiều ngang) & Gộp vào giữa trên Desktop */}
+          <div className="w-full md:w-auto flex items-center justify-center shrink-0">
             <div 
               style={{
-                background: 'rgba(255, 255, 255, 0.08)',
                 backdropFilter: 'blur(12px)',
-                WebkitBackdropFilter: 'blur(12px)',
-                border: '1px solid rgba(255, 255, 255, 0.18)',
-                borderRadius: '12px',
-                padding: '5px 14px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '10px'
+                WebkitBackdropFilter: 'blur(12px)'
               }}
-              className="shrink-0 shadow-2xs"
+              className="w-full md:w-auto flex items-center justify-center bg-white/10 md:bg-white/[0.08] border border-white/15 md:border-white/[0.18] rounded-lg md:rounded-xl py-1 px-2 md:py-[5px] md:px-[14px] text-xs md:text-[13.5px] gap-2 md:gap-[10px] shadow-2xs shrink-0"
             >
-              <Calendar className="w-4 h-4 shrink-0 hidden sm:block" style={{ color: '#34d399' }} />
-              <select
-                value={currentAcademicYear}
-                onChange={(e) => handleYearChange(e.target.value)}
-                style={{
-                  color: '#ffffff',
-                  fontWeight: 700,
-                  fontSize: '13.5px',
-                  background: 'transparent',
-                  border: 'none',
-                  outline: 'none',
-                  cursor: 'pointer'
-                }}
-                className="focus:outline-none"
-                title="Chọn năm học"
-              >
-                {availableYears.map(year => (
-                  <option key={year} value={year} className="bg-[#0b2447] text-white font-medium">
-                    {year}
+              <Calendar className="w-3.5 h-3.5 md:w-4 md:h-4 shrink-0" style={{ color: '#34d399' }} />
+              <div className="flex items-center gap-1">
+                <span className="md:hidden text-emerald-200/90 font-medium">Năm học</span>
+                <select
+                  value={currentAcademicYear}
+                  onChange={(e) => handleYearChange(e.target.value)}
+                  className="text-white font-bold text-xs md:text-[13.5px] bg-transparent border-none outline-none cursor-pointer focus:outline-none"
+                  title="Chọn năm học"
+                >
+                  {availableYears.map(year => (
+                    <option key={year} value={year} className="bg-[#0b2447] text-white font-medium">
+                      {year}
+                    </option>
+                  ))}
+                  <option value="__add_new__" className="bg-[#0b2447] text-emerald-300 font-semibold">
+                    + Thêm năm...
                   </option>
-                ))}
-                <option value="__add_new__" className="bg-[#0b2447] text-emerald-300 font-semibold">
-                  + Thêm năm...
-                </option>
-              </select>
+                </select>
+              </div>
 
               <span style={{ color: 'rgba(255, 255, 255, 0.35)', fontWeight: 400 }}>/</span>
 
               <select
                 value={currentSemester}
                 onChange={(e) => handleSemesterChange(e.target.value)}
-                style={{
-                  color: '#ffffff',
-                  fontWeight: 700,
-                  fontSize: '13.5px',
-                  background: 'transparent',
-                  border: 'none',
-                  outline: 'none',
-                  cursor: 'pointer'
-                }}
-                className="focus:outline-none"
+                className="text-white font-bold text-xs md:text-[13.5px] bg-transparent border-none outline-none cursor-pointer focus:outline-none"
                 title="Chọn học kỳ"
               >
                 {AVAILABLE_SEMESTERS.map(sem => (
@@ -7202,7 +7239,7 @@ export default function App() {
                         transition: 'all 0.2s'
                       }
                 }
-                className="flex items-center gap-1 hover:brightness-110 active:scale-95 ml-1"
+                className="flex items-center gap-1 hover:brightness-110 active:scale-95 ml-1 shrink-0"
                 title={isCurrentTermLocked ? 'Dữ liệu đang khóa. Nhấp để mở khóa.' : 'Dữ liệu đang mở. Nhấp để khóa.'}
               >
                 {isCurrentTermLocked ? (
@@ -7220,8 +7257,8 @@ export default function App() {
             </div>
           </div>
 
-          {/* Account Cluster & Help Button */}
-          <div className="flex items-center gap-2 shrink-0">
+          {/* Account Cluster & Help Button (Desktop >= 768px giữ nguyên 1 hàng) */}
+          <div className="hidden md:flex items-center gap-2 shrink-0">
             {/* NÚT HƯỚNG DẪN SỬ DỤNG & PHÍM TẮT */}
             <button
               type="button"
@@ -10764,22 +10801,22 @@ export default function App() {
 
           {/* 1. MÀN HÌNH KHỞI ĐỘNG MẶC ĐỊNH (DEFAULT WELCOME / DASHBOARD VIEW) */}
           {(activeTab === 'welcome' || activeTab === null) && (
-            <div className="flex-1 flex flex-col items-center justify-center py-8 md:py-12 px-4 sm:px-6 text-center max-w-5xl mx-auto w-full animate-in fade-in duration-300">
+            <div className="flex-1 flex flex-col items-center justify-start md:justify-center pt-4 pb-5 md:py-12 px-3 sm:px-6 text-center max-w-5xl mx-auto w-full animate-in fade-in duration-300">
               {/* Logo & Tên Trường */}
-              <div className="flex flex-col items-center mb-6">
-                <div className="w-24 h-24 md:w-28 md:h-28 rounded-3xl bg-white border border-slate-200/90 shadow-md p-3 flex items-center justify-center mb-5 transform hover:scale-105 transition-all duration-300">
-                  <SchoolLogo
-                    customLogo={customLogo}
-                    alt="Logo Trường THPT Nguyễn Bỉnh Khiêm (An Giang)"
+              <div className="flex flex-col items-center mb-3.5 md:mb-6">
+                <div className="w-16 h-16 md:w-28 md:h-28 rounded-2xl md:rounded-3xl bg-white border border-slate-200/90 shadow-md p-2 md:p-3 flex items-center justify-center mb-2.5 md:mb-5 transform hover:scale-105 transition-all duration-300">
+                  <SchoolLogo 
+                    customLogo={customLogo} 
+                    alt="Logo Trường THPT Nguyễn Bỉnh Khiêm (An Giang)" 
                     className="w-full h-full object-contain"
                   />
                 </div>
-                <div className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-blue-50 border border-blue-200/80 text-blue-700 text-xs font-bold uppercase tracking-wider mb-2.5 shadow-2xs">
+                <div className="inline-flex items-center gap-1.5 px-3 py-0.5 md:px-3.5 md:py-1 rounded-full bg-blue-50 border border-blue-200/80 text-blue-700 text-[11px] md:text-xs font-bold uppercase tracking-wider mb-1.5 md:mb-2.5 shadow-2xs">
                   <School className="w-3.5 h-3.5" />
                   <span>SỞ GIÁO DỤC VÀ ĐÀO TẠO AN GIANG</span>
                 </div>
                 <h1 
-                  className="text-2xl sm:text-3xl font-extrabold uppercase text-center leading-tight tracking-wider bg-gradient-to-r from-blue-900 via-indigo-800 to-blue-700 bg-clip-text text-transparent transition-all duration-300 drop-shadow-[0_2px_4px_rgba(30,58,138,0.12)]"
+                  className="text-xl sm:text-2xl md:text-3xl font-extrabold uppercase text-center leading-tight tracking-wider bg-gradient-to-r from-blue-900 via-indigo-800 to-blue-700 bg-clip-text text-transparent transition-all duration-300 drop-shadow-[0_2px_4px_rgba(30,58,138,0.12)]"
                   style={{ 
                     fontFamily: "'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
                     letterSpacing: '0.04em',
@@ -10788,46 +10825,46 @@ export default function App() {
                 >
                   THPT NGUYỄN BỈNH KHIÊM
                 </h1>
-                <div className="flex items-center gap-2 mt-2">
-                  <span className="text-sm font-bold text-indigo-700 font-mono">EduSchedule AI</span>
+                <div className="flex items-center gap-2 mt-1 md:mt-2">
+                  <span className="text-xs md:text-sm font-bold text-indigo-700 font-mono">EduSchedule AI</span>
                   <span className="text-slate-400">•</span>
-                  <span className="text-xs text-slate-500 font-medium">
+                  <span className="text-[11px] md:text-xs text-slate-500 font-medium">
                     {(currentSemester || 'Học kỳ I').replace(/^(Học kỳ\s*)+/i, 'Học kỳ ')} — Năm học {currentAcademicYear || '2026 – 2027'}
                   </span>
                 </div>
               </div>
 
               {/* Khung giới thiệu trung tâm + 3 nút Truy cập nhanh (Quick Actions) */}
-              <div className="bg-white/90 border border-slate-200/90 rounded-2xl p-5 md:p-6 max-w-3xl w-full mx-auto shadow-xs backdrop-blur-xs mb-6">
-                <p className="text-sm md:text-base text-slate-700 font-semibold leading-relaxed">
+              <div className="bg-white/90 border border-slate-200/90 rounded-2xl p-3.5 md:p-6 max-w-3xl w-full mx-auto shadow-xs backdrop-blur-xs mb-4 md:mb-6">
+                <p className="text-xs sm:text-sm md:text-base text-slate-700 font-semibold leading-relaxed">
                   Phần mềm Phân công giảng dạy và Xếp thời khóa biểu thông minh.
                 </p>
 
-                <div className="mt-4 flex flex-wrap justify-center gap-3">
+                <div className="mt-3 md:mt-4 flex flex-wrap justify-center gap-2 md:gap-3">
                   <button
                     type="button"
                     onClick={() => setActiveTab('board')}
-                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs sm:text-sm tracking-wide shadow-sm hover:shadow-md transition-all cursor-pointer whitespace-nowrap"
+                    className="inline-flex items-center gap-1.5 md:gap-2 px-3 py-2 md:px-4 md:py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs sm:text-sm tracking-wide shadow-sm hover:shadow-md transition-all cursor-pointer whitespace-nowrap"
                   >
-                    <Table className="w-4 h-4 shrink-0" />
+                    <Table className="w-3.5 h-3.5 md:w-4 md:h-4 shrink-0" />
                     <span>BẢNG PHÂN CÔNG</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => setActiveTab('timetable')}
-                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold text-xs sm:text-sm tracking-wide shadow-sm hover:shadow-md transition-all cursor-pointer whitespace-nowrap"
+                    className="inline-flex items-center gap-1.5 md:gap-2 px-3 py-2 md:px-4 md:py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold text-xs sm:text-sm tracking-wide shadow-sm hover:shadow-md transition-all cursor-pointer whitespace-nowrap"
                   >
-                    <Zap className="w-4 h-4 shrink-0" />
+                    <Zap className="w-3.5 h-3.5 md:w-4 md:h-4 shrink-0" />
                     <span>XẾP TKB TỰ ĐỘNG</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => setIsSendScheduleModalOpen(true)}
-                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-bold text-xs sm:text-sm tracking-wide shadow-sm hover:shadow-md transition-all cursor-pointer whitespace-nowrap"
+                    className="inline-flex items-center gap-1.5 md:gap-2 px-3 py-2 md:px-4 md:py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-bold text-xs sm:text-sm tracking-wide shadow-sm hover:shadow-md transition-all cursor-pointer whitespace-nowrap"
                   >
-                    <Send className="w-4 h-4 shrink-0" />
+                    <Send className="w-3.5 h-3.5 md:w-4 md:h-4 shrink-0" />
                     <span>GỬI PHÂN CÔNG &amp; TKB</span>
                   </button>
                 </div>
