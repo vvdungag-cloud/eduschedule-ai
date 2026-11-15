@@ -47,7 +47,11 @@ import {
   getCachedTermData,
   setCachedTermData,
   invalidateTermCache,
-  getLazyClassSubjectPeriods
+  getLazyClassSubjectPeriods,
+  collectLocalSchoolSnapshot,
+  applyCloudDataToLocalStorage,
+  normalizeAcademicYearString,
+  serializeForFirestoreDoc
 } from './utils/firebaseSync';
 import { getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { SchoolInfo, exportTeacherProfileToWord, exportTeacherProfileToPDF, TeacherProfileExportData } from './utils/exportUtils';
@@ -1574,6 +1578,85 @@ export default function App() {
   const [isPullingCloud, setIsPullingCloud] = useState(false);
   const [isSavingAssignmentsCloud, setIsSavingAssignmentsCloud] = useState(false);
 
+  const lastAppliedCloudStampRef = useRef<string>('');
+
+  // Hợp nhất nạp đè toàn bộ state của App + localStorage + TimetableTab từ snapshot Cloud Firestore
+  const hydrateAppStatesFromCloudData = useCallback((
+    cloudData: any,
+    options?: { emitEvents?: boolean; isInitialMount?: boolean }
+  ) => {
+    if (!cloudData || typeof cloudData !== 'object') return;
+
+    // 1. Nạp đè toàn bộ localStorage (kể cả Ràng buộc: lockedSlots, customFixedSlots, teacherConstraints, advancedConstraints, sessionMode, afternoonPeriodsCount, TKB...)
+    applyCloudDataToLocalStorage(cloudData, currentTermKey);
+
+    // 2. Nếu mở trên thiết bị mới (chưa từng lưu năm học cục bộ), đồng bộ năm học/học kỳ theo Cloud nếu có
+    if (options?.isInitialMount && !localStorage.getItem('edu_current_academic_year') && cloudData.academicYear) {
+      const normalizedYear = normalizeAcademicYearString(cloudData.academicYear);
+      if (normalizedYear && normalizedYear !== currentAcademicYear) {
+        setCurrentAcademicYear(normalizedYear);
+      }
+      if (cloudData.semester && cloudData.semester !== currentSemester) {
+        setCurrentSemester(cloudData.semester);
+      }
+    }
+
+    // 3. Cập nhật toàn bộ React States của App.tsx
+    if (Array.isArray(cloudData.teachers) && cloudData.teachers.length > 0) {
+      setTeachers(cloudData.teachers);
+    }
+    if (Array.isArray(cloudData.classes) && cloudData.classes.length > 0) {
+      setClasses(cloudData.classes);
+    }
+    const resolvedSubjects = Array.isArray(cloudData.subjects) && cloudData.subjects.length > 0
+      ? cloudData.subjects
+      : (Array.isArray(cloudData.subjectsConfig) && cloudData.subjectsConfig.length > 0 ? cloudData.subjectsConfig : null);
+    if (resolvedSubjects) {
+      setSubjectsConfig(resolvedSubjects);
+    }
+    if (Array.isArray(cloudData.departments) && cloudData.departments.length > 0) {
+      setDepartments(cloudData.departments);
+    }
+    if (cloudData.assignments && typeof cloudData.assignments === 'object') {
+      const cloudSubCount = Object.values(cloudData.assignments.subjectAssignments || {}).reduce(
+        (sum: number, cls: any) => sum + Object.keys(cls || {}).length, 0
+      );
+      if (cloudSubCount > 0) {
+        setAssignments(cloudData.assignments);
+      }
+    }
+    if (cloudData.classSubjectPeriods && typeof cloudData.classSubjectPeriods === 'object') {
+      setClassSubjectPeriods(cloudData.classSubjectPeriods);
+    }
+    if (cloudData.classThreeConsecutivePeriods && typeof cloudData.classThreeConsecutivePeriods === 'object') {
+      setClassThreeConsecutivePeriods(cloudData.classThreeConsecutivePeriods);
+    }
+    if (cloudData.classShifts && typeof cloudData.classShifts === 'object') {
+      setClassShifts(cloudData.classShifts);
+    }
+    if (cloudData.schoolInfo && typeof cloudData.schoolInfo === 'object') {
+      setSchoolInfo(prev => ({
+        ...prev,
+        ...cloudData.schoolInfo,
+        academicYear: currentAcademicYear,
+        semester: currentSemester
+      }));
+    }
+    if (Array.isArray(cloudData.availableYears) && cloudData.availableYears.length > 0) {
+      setAvailableYears(cloudData.availableYears);
+    }
+    if (cloudData.lockedYears && typeof cloudData.lockedYears === 'object') {
+      setLockedYears(cloudData.lockedYears);
+    }
+
+    // 4. Phát tín hiệu cập nhật cho TimetableTab & activeTimetableData
+    if (options?.emitEvents) {
+      const resolvedSchedule = cloudData.timetableData !== undefined ? cloudData.timetableData : (cloudData.schedules ?? null);
+      window.dispatchEvent(new CustomEvent('cloud-data-pulled', { detail: cloudData }));
+      window.dispatchEvent(new CustomEvent('edu_timetable_updated', { detail: resolvedSchedule }));
+    }
+  }, [currentTermKey, currentAcademicYear, currentSemester]);
+
   // 3. TỰ ĐỘNG TẢI DỮ LIỆU KHI KHỞI ĐỘNG TRÊN THIẾT BỊ MỚI (Fetch/Pull on Mount)
   useEffect(() => {
     let isMounted = true;
@@ -1585,148 +1668,102 @@ export default function App() {
           const cloudData = res.data;
           console.log('[Cloud Sync] Khởi tạo dữ liệu thành công', res.fromCache ? '(từ bộ nhớ đệm)' : '(từ Cloud Firestore)');
 
-          if (cloudData.teachers && Array.isArray(cloudData.teachers) && cloudData.teachers.length > 0) {
-            setTeachers(cloudData.teachers);
-            try { localStorage.setItem('edu_teachers', JSON.stringify(cloudData.teachers)); } catch {}
-          }
-          if (cloudData.classes && Array.isArray(cloudData.classes) && cloudData.classes.length > 0) {
-            setClasses(cloudData.classes);
-            try { localStorage.setItem('edu_classes_v3', JSON.stringify(cloudData.classes)); } catch {}
-          }
-          if (cloudData.subjects && Array.isArray(cloudData.subjects) && cloudData.subjects.length > 0) {
-            setSubjectsConfig(cloudData.subjects);
-            try { localStorage.setItem('edu_subjects_config', JSON.stringify(cloudData.subjects)); } catch {}
-          }
+          lastAppliedCloudStampRef.current = `${cloudData.updatedAt || ''}_${cloudData.lastUpdatedText || ''}`;
+          hydrateAppStatesFromCloudData(cloudData, { emitEvents: true, isInitialMount: true });
+
           if (cloudData.assignments && typeof cloudData.assignments === 'object') {
             const cloudAssign = cloudData.assignments;
             const cloudSubCount = Object.values(cloudAssign.subjectAssignments || {}).reduce(
               (sum: number, cls: any) => sum + Object.keys(cls || {}).length, 0
             );
 
-            // Kiểm tra phân công hiện có ở localStorage / State
-            let localAssignments: any = null;
-            try {
-              const saved = localStorage.getItem('edu_assignments_v3') || localStorage.getItem('edu_assignments');
-              if (saved) {
-                const p = JSON.parse(saved);
-                localAssignments = p;
-              }
-            } catch {}
-
-            const localSubCount = Object.values(localAssignments?.subjectAssignments || {}).reduce(
-              (sum: number, cls: any) => sum + Object.keys(cls || {}).length, 0
-            );
-
-            if (cloudSubCount > 0) {
-              setAssignments(cloudAssign);
-              try { 
-                localStorage.setItem('edu_assignments_v3', JSON.stringify(cloudAssign));
-                localStorage.setItem('edu_assignments', JSON.stringify(cloudAssign));
-                localStorage.setItem(`edu_term_assignments_${currentTermKey}`, JSON.stringify(cloudAssign));
-                localStorage.setItem(`edu_term_assignments_${TARGET_TERM_KEY}`, JSON.stringify(cloudAssign));
-              } catch {}
-            } else if (localSubCount > 0) {
-              // Cloud document có subjectAssignments bị trống, nhưng thiết bị này ĐÃ CÓ phân công đầy đủ!
-              // Bảo toàn phân công bộ môn của máy và tự động đồng bộ lên Cloud để vá document!
-              console.log(`[Cloud Sync] Bảo toàn ${localSubCount} phân công từ máy và tự động cập nhật lên Firestore!`);
-              const merged = {
-                homeroomAssignments: cloudAssign.homeroomAssignments && Object.keys(cloudAssign.homeroomAssignments).length > 0
-                  ? cloudAssign.homeroomAssignments
-                  : (localAssignments.homeroomAssignments || DEFAULT_HOMEROOM_ASSIGNMENTS),
-                subjectAssignments: localAssignments.subjectAssignments
-              };
-              setAssignments(merged);
-              try { 
-                localStorage.setItem('edu_assignments_v3', JSON.stringify(merged));
-                localStorage.setItem('edu_assignments', JSON.stringify(merged));
-                localStorage.setItem(`edu_term_assignments_${currentTermKey}`, JSON.stringify(merged));
-                localStorage.setItem(`edu_term_assignments_${TARGET_TERM_KEY}`, JSON.stringify(merged));
+            if (cloudSubCount === 0) {
+              // Kiểm tra phân công hiện có ở localStorage / State để tự vá nếu Cloud vô tình thiếu subjectAssignments
+              let localAssignments: any = null;
+              try {
+                const saved = localStorage.getItem('edu_assignments_v3') || localStorage.getItem('edu_assignments');
+                if (saved) localAssignments = JSON.parse(saved);
               } catch {}
 
-              pushSchoolDataToCloud({
-                teachers: cloudData.teachers || teachers,
-                classes: cloudData.classes || classes,
-                subjects: cloudData.subjects || subjectsConfig,
-                assignments: merged,
-                schedules: cloudData.schedules,
-                schoolInfo: cloudData.schoolInfo,
-                academicYear: currentAcademicYear,
-                semester: currentSemester
-              }).catch(err => console.warn('[Cloud Sync] Auto-heal error:', err));
-            } else {
-              // Nếu cả 2 đều trống: Tôn trọng trạng thái hiện tại (nếu người dùng đã xóa)
-              const hasExplicitState = localStorage.getItem('edu_assignments_v3') !== null || cloudData.assignments !== undefined;
-              if (hasExplicitState) {
-                setAssignments(cloudAssign || { homeroomAssignments: {}, subjectAssignments: {} });
-              } else {
-                // Chỉ chạy solver khởi tạo khi là phiên làm việc lần đầu tiên tuyệt đối
-                const tList = cloudData.teachers && cloudData.teachers.length > 0 ? cloudData.teachers : DEFAULT_TEACHERS;
-                const cList = cloudData.classes && cloudData.classes.length > 0 ? cloudData.classes : DEFAULT_CLASSES;
-                const subjectReqs = cList.map((c: any) => ({
-                  classId: c.id,
-                  className: c.name,
-                  grade: c.grade,
-                  subjects: SUBJECTS.map(s => ({ name: s.id, periods: getSubjectPeriod(s.id, c.grade, c.id) }))
-                }));
-                const solved = solveAssignments(tList, cList, subjectReqs, cloudAssign, 'teaching_only');
-                if (solved && solved.subjectAssignments && Object.keys(solved.subjectAssignments).length > 0) {
-                  const fullAssign = {
-                    homeroomAssignments: cloudAssign.homeroomAssignments && Object.keys(cloudAssign.homeroomAssignments).length > 0
-                      ? cloudAssign.homeroomAssignments
-                      : DEFAULT_HOMEROOM_ASSIGNMENTS,
-                    subjectAssignments: solved.subjectAssignments
-                  };
-                  setAssignments(fullAssign);
-                  try {
-                    localStorage.setItem('edu_assignments_v3', JSON.stringify(fullAssign));
-                    localStorage.setItem('edu_assignments', JSON.stringify(fullAssign));
-                    localStorage.setItem(`edu_term_assignments_${currentTermKey}`, JSON.stringify(fullAssign));
-                  } catch {}
+              const localSubCount = Object.values(localAssignments?.subjectAssignments || {}).reduce(
+                (sum: number, cls: any) => sum + Object.keys(cls || {}).length, 0
+              );
+
+              if (localSubCount > 0) {
+                console.log(`[Cloud Sync] Bảo toàn ${localSubCount} phân công từ máy và tự động cập nhật lên Firestore!`);
+                const merged = {
+                  homeroomAssignments: cloudAssign.homeroomAssignments && Object.keys(cloudAssign.homeroomAssignments).length > 0
+                    ? cloudAssign.homeroomAssignments
+                    : (localAssignments.homeroomAssignments || DEFAULT_HOMEROOM_ASSIGNMENTS),
+                  subjectAssignments: localAssignments.subjectAssignments
+                };
+                setAssignments(merged);
+                try {
+                  localStorage.setItem('edu_assignments_v3', JSON.stringify(merged));
+                  localStorage.setItem('edu_assignments', JSON.stringify(merged));
+                  localStorage.setItem(`edu_term_assignments_${currentTermKey}`, JSON.stringify(merged));
+                  localStorage.setItem(`edu_term_assignments_${TARGET_TERM_KEY}`, JSON.stringify(merged));
+                } catch {}
 
                 pushSchoolDataToCloud({
-                  teachers: tList,
-                  classes: cList,
+                  teachers: cloudData.teachers || teachers,
+                  classes: cloudData.classes || classes,
                   subjects: cloudData.subjects || subjectsConfig,
-                  assignments: fullAssign,
-                  schedules: cloudData.schedules || null,
+                  departments: cloudData.departments || departments,
+                  assignments: merged,
                   schoolInfo: cloudData.schoolInfo || schoolInfo,
                   academicYear: currentAcademicYear,
-                  semester: currentSemester
-                }).catch(err => console.warn('[Cloud Sync] Auto-heal push error:', err));
+                  semester: currentSemester,
+                  termKey: currentTermKey
+                }).catch(err => console.warn('[Cloud Sync] Auto-heal error:', err));
+              } else {
+                const hasExplicitState = localStorage.getItem('edu_assignments_v3') !== null || cloudData.assignments !== undefined;
+                if (hasExplicitState) {
+                  setAssignments(cloudAssign || { homeroomAssignments: {}, subjectAssignments: {} });
+                } else {
+                  const tList = cloudData.teachers && cloudData.teachers.length > 0 ? cloudData.teachers : DEFAULT_TEACHERS;
+                  const cList = cloudData.classes && cloudData.classes.length > 0 ? cloudData.classes : DEFAULT_CLASSES;
+                  const subjectReqs = cList.map((c: any) => ({
+                    classId: c.id,
+                    className: c.name,
+                    grade: c.grade,
+                    subjects: SUBJECTS.map(s => ({ name: s.id, periods: getSubjectPeriod(s.id, c.grade, c.id) }))
+                  }));
+                  const solved = solveAssignments(tList, cList, subjectReqs, cloudAssign, 'teaching_only');
+                  if (solved && solved.subjectAssignments && Object.keys(solved.subjectAssignments).length > 0) {
+                    const fullAssign = {
+                      homeroomAssignments: cloudAssign.homeroomAssignments && Object.keys(cloudAssign.homeroomAssignments).length > 0
+                        ? cloudAssign.homeroomAssignments
+                        : DEFAULT_HOMEROOM_ASSIGNMENTS,
+                      subjectAssignments: solved.subjectAssignments
+                    };
+                    setAssignments(fullAssign);
+                    try {
+                      localStorage.setItem('edu_assignments_v3', JSON.stringify(fullAssign));
+                      localStorage.setItem('edu_assignments', JSON.stringify(fullAssign));
+                      localStorage.setItem(`edu_term_assignments_${currentTermKey}`, JSON.stringify(fullAssign));
+                    } catch {}
+
+                    pushSchoolDataToCloud({
+                      teachers: tList,
+                      classes: cList,
+                      subjects: cloudData.subjects || subjectsConfig,
+                      departments: cloudData.departments || departments,
+                      assignments: fullAssign,
+                      schoolInfo: cloudData.schoolInfo || schoolInfo,
+                      academicYear: currentAcademicYear,
+                      semester: currentSemester,
+                      termKey: currentTermKey
+                    }).catch(err => console.warn('[Cloud Sync] Auto-heal push error:', err));
+                  }
+                }
               }
             }
           }
-          }
-          if (cloudData.schedules) {
-            try {
-              localStorage.setItem(`edu_timetable_${currentTermKey}`, JSON.stringify(cloudData.schedules));
-              localStorage.setItem('edu_timetable_active', JSON.stringify(cloudData.schedules));
-            } catch {}
-          }
-          if (cloudData.classSubjectPeriods) {
-            setClassSubjectPeriods(cloudData.classSubjectPeriods);
-            try { localStorage.setItem('edu_class_subject_periods_v2', JSON.stringify(cloudData.classSubjectPeriods)); } catch {}
-          }
-          if (cloudData.classShifts) {
-            setClassShifts(cloudData.classShifts);
-            try { localStorage.setItem(`edu_class_shifts_${currentTermKey}`, JSON.stringify(cloudData.classShifts)); } catch {}
-          }
-          if (cloudData.schoolInfo) {
-            setSchoolInfo(cloudData.schoolInfo);
-            try { localStorage.setItem('edu_school_info_v1', JSON.stringify(cloudData.schoolInfo)); } catch {}
-          }
-
-          const updatedTime = cloudData.lastUpdatedText || new Date().toLocaleString('vi-VN');
-          try { localStorage.setItem('edu_last_cloud_synced_at', updatedTime); } catch {}
         } else if (!res.data && isMounted) {
-          // Document chưa có trên Cloud -> Tự động khởi tạo dữ liệu chuẩn 101 GV, 44 Lớp kèm phân công bộ môn đầy đủ
+          // Document chưa có trên Cloud -> Tự động khởi tạo dữ liệu chuẩn kèm phân công & ràng buộc hiện có
           console.log('[Cloud Sync] Khởi tạo dữ liệu gốc lên Cloud Firestore...');
-          const initialSchedule = (() => {
-            try {
-              const s = localStorage.getItem(`edu_timetable_${currentTermKey}`) || localStorage.getItem('edu_timetable_active');
-              return s ? JSON.parse(s) : null;
-            } catch { return null; }
-          })();
+          const snapshot = collectLocalSchoolSnapshot(currentTermKey);
 
           const subjectReqs = DEFAULT_CLASSES.map((c: any) => ({
             classId: c.id,
@@ -1744,10 +1781,26 @@ export default function App() {
             teachers: DEFAULT_TEACHERS,
             classes: DEFAULT_CLASSES,
             subjects: DEFAULT_SUBJECTS_CONFIG,
+            departments,
             assignments: initialAssignments,
-            schedules: initialSchedule,
+            schedules: snapshot.timetableData ?? null,
+            timetableData: snapshot.timetableData ?? null,
+            classSubjectPeriods,
+            classThreeConsecutivePeriods,
+            classShifts,
+            sessionMode: snapshot.sessionMode,
+            afternoonPeriodsCount: snapshot.afternoonPeriodsCount,
+            lockedSlots: snapshot.lockedSlots,
+            customFixedSlots: snapshot.customFixedSlots,
+            teacherConstraints: snapshot.teacherConstraints,
+            advancedConstraints: snapshot.advancedConstraints,
+            availableYears,
+            lockedYears,
+            schoolInfo,
             academicYear: currentAcademicYear,
-            semester: currentSemester
+            semester: currentSemester,
+            termKey: currentTermKey,
+            fullSync: true
           });
         }
       } catch (err) {
@@ -1760,67 +1813,21 @@ export default function App() {
     // Lắng nghe thay đổi thời gian thực qua Firestore onSnapshot
     const unsub = subscribeToSchoolDoc((cloudData) => {
       if (!isMounted || !cloudData) return;
-      if (cloudData.teachers && Array.isArray(cloudData.teachers) && cloudData.teachers.length > 0) {
-        setTeachers(cloudData.teachers);
-        try { localStorage.setItem('edu_teachers', JSON.stringify(cloudData.teachers)); } catch {}
+      const stamp = `${cloudData.updatedAt || ''}_${cloudData.lastUpdatedText || ''}`;
+      if (stamp && stamp !== '_' && stamp === lastAppliedCloudStampRef.current) {
+        return;
       }
-      if (cloudData.classes && Array.isArray(cloudData.classes) && cloudData.classes.length > 0) {
-        setClasses(cloudData.classes);
-        try { localStorage.setItem('edu_classes_v3', JSON.stringify(cloudData.classes)); } catch {}
-      }
-      if (cloudData.subjects && Array.isArray(cloudData.subjects) && cloudData.subjects.length > 0) {
-        setSubjectsConfig(cloudData.subjects);
-        try { localStorage.setItem('edu_subjects_config', JSON.stringify(cloudData.subjects)); } catch {}
-      }
-      if (cloudData.assignments && typeof cloudData.assignments === 'object') {
-        const cloudAssign = cloudData.assignments;
-        const subCount = Object.values(cloudAssign.subjectAssignments || {}).reduce(
-          (sum: number, cls: any) => sum + Object.keys(cls || {}).length, 0
-        );
-        if (subCount > 0) {
-          setAssignments(cloudAssign);
-          try { 
-            localStorage.setItem('edu_assignments_v3', JSON.stringify(cloudAssign));
-            localStorage.setItem(`edu_term_assignments_${currentTermKey}`, JSON.stringify(cloudAssign));
-          } catch {}
-        }
-      }
-      if (cloudData.schedules) {
-        try {
-          localStorage.setItem(`edu_timetable_${currentTermKey}`, JSON.stringify(cloudData.schedules));
-          localStorage.setItem('edu_timetable_active', JSON.stringify(cloudData.schedules));
-        } catch {}
-      }
-      if (cloudData.classSubjectPeriods && typeof cloudData.classSubjectPeriods === 'object') {
-        setClassSubjectPeriods(prev => {
-          const merged = { ...cloudData.classSubjectPeriods, ...prev };
-          try { localStorage.setItem('edu_class_subject_periods_v2', JSON.stringify(merged)); } catch {}
-          return merged;
-        });
-      }
-      if (cloudData.classShifts) {
-        setClassShifts(cloudData.classShifts);
-        try { localStorage.setItem(`edu_class_shifts_${currentTermKey}`, JSON.stringify(cloudData.classShifts)); } catch {}
-      }
+      lastAppliedCloudStampRef.current = stamp;
+      setCachedTermData(TARGET_TERM_KEY, cloudData);
+      hydrateAppStatesFromCloudData(cloudData, { emitEvents: true });
     });
 
-    // Lắng nghe sự kiện kéo dữ liệu thành công từ authContext
+    // Lắng nghe sự kiện kéo dữ liệu thành công từ authContext (không phát lại cloud-data-pulled để tránh vòng lặp)
     const handleCustomPull = (e: any) => {
       if (!isMounted || !e.detail) return;
       const cloudData = e.detail;
-      if (cloudData.teachers && Array.isArray(cloudData.teachers)) setTeachers(cloudData.teachers);
-      if (cloudData.classes && Array.isArray(cloudData.classes)) setClasses(cloudData.classes);
-      if (cloudData.subjects && Array.isArray(cloudData.subjects)) setSubjectsConfig(cloudData.subjects);
-      if (cloudData.assignments) {
-        const subCount = Object.values(cloudData.assignments.subjectAssignments || {}).reduce(
-          (sum: number, cls: any) => sum + Object.keys(cls || {}).length, 0
-        );
-        if (subCount > 0) {
-          setAssignments(cloudData.assignments);
-        }
-      }
-      if (cloudData.classSubjectPeriods) setClassSubjectPeriods(cloudData.classSubjectPeriods);
-      if (cloudData.classShifts) setClassShifts(cloudData.classShifts);
+      lastAppliedCloudStampRef.current = `${cloudData.updatedAt || ''}_${cloudData.lastUpdatedText || ''}`;
+      hydrateAppStatesFromCloudData(cloudData, { emitEvents: false });
     };
     window.addEventListener('cloud-data-pulled', handleCustomPull);
 
@@ -1829,30 +1836,25 @@ export default function App() {
       unsub();
       window.removeEventListener('cloud-data-pulled', handleCustomPull);
     };
-  }, [currentTermKey]);
+  }, [currentTermKey, hydrateAppStatesFromCloudData]);
 
-  // 4. HÀM CƯỠNG BỨC TẢI DỮ LIỆU TỪ CLOUD (Pull on Demand)
+  // 4. HÀM CƯỠNG BỨC TẢI DỮ LIỆU TỪ CLOUD (Pull on Demand — luôn bỏ qua cache & nạp đè toàn bộ)
   const handleForcePullFromCloud = async () => {
     setIsPullingCloud(true);
     try {
-      const res = await pullSchoolDataFromCloud();
+      const res = await pullSchoolDataFromCloud(true);
       if (res.success && res.data) {
         const cloudData = res.data;
-        if (cloudData.teachers && Array.isArray(cloudData.teachers)) setTeachers(cloudData.teachers);
-        if (cloudData.classes && Array.isArray(cloudData.classes)) setClasses(cloudData.classes);
-        if (cloudData.subjects && Array.isArray(cloudData.subjects)) setSubjectsConfig(cloudData.subjects);
+        lastAppliedCloudStampRef.current = `${cloudData.updatedAt || ''}_${cloudData.lastUpdatedText || ''}`;
+
+        // Nạp đè toàn bộ state App.tsx, localStorage (GV, Lớp, Phân công, Ràng buộc, TKB) và phát tín hiệu cho TimetableTab
+        hydrateAppStatesFromCloudData(cloudData, { emitEvents: true });
+
         if (cloudData.assignments) {
           const subCount = Object.values(cloudData.assignments.subjectAssignments || {}).reduce(
             (sum: number, cls: any) => sum + Object.keys(cls || {}).length, 0
           );
-          if (subCount > 0) {
-            setAssignments(cloudData.assignments);
-            try {
-              localStorage.setItem('edu_assignments_v3', JSON.stringify(cloudData.assignments));
-              localStorage.setItem(`edu_term_assignments_${currentTermKey}`, JSON.stringify(cloudData.assignments));
-            } catch {}
-          } else {
-            // Cloud có assignments nhưng subjectAssignments bị trống
+          if (subCount === 0) {
             let localAssignments: any = null;
             try {
               const saved = localStorage.getItem('edu_assignments_v3') || localStorage.getItem('edu_assignments');
@@ -1878,14 +1880,14 @@ export default function App() {
                 teachers: cloudData.teachers || teachers,
                 classes: cloudData.classes || classes,
                 subjects: cloudData.subjects || subjectsConfig,
+                departments: cloudData.departments || departments,
                 assignments: merged,
-                schedules: cloudData.schedules || null,
                 schoolInfo: cloudData.schoolInfo || schoolInfo,
                 academicYear: currentAcademicYear,
-                semester: currentSemester
+                semester: currentSemester,
+                termKey: currentTermKey
               }).catch(e => console.warn('[Force Pull] Auto-heal push error:', e));
             } else {
-              // Cả hai đều trống: Tôn trọng trạng thái hiện tại (nếu người dùng đã xóa)
               const hasExplicitState = localStorage.getItem('edu_assignments_v3') !== null || cloudData.assignments !== undefined;
               if (hasExplicitState) {
                 setAssignments(cloudData.assignments || { homeroomAssignments: {}, subjectAssignments: {} });
@@ -1915,20 +1917,21 @@ export default function App() {
                     teachers: tList,
                     classes: cList,
                     subjects: cloudData.subjects || subjectsConfig,
+                    departments: cloudData.departments || departments,
                     assignments: fullAssign,
-                    schedules: cloudData.schedules || null,
                     schoolInfo: cloudData.schoolInfo || schoolInfo,
                     academicYear: currentAcademicYear,
-                    semester: currentSemester
+                    semester: currentSemester,
+                    termKey: currentTermKey
                   }).catch(e => console.warn('[Force Pull] Solver push error:', e));
                 }
               }
             }
           }
         }
-        if (cloudData.classSubjectPeriods) setClassSubjectPeriods(cloudData.classSubjectPeriods);
-        if (cloudData.classShifts) setClassShifts(cloudData.classShifts);
-        showTermNotification(`✅ Đã nạp thành công dữ liệu mới nhất từ Cloud Firestore (101 GV, 44 Lớp, TKB)!`);
+        const tCount = Array.isArray(cloudData.teachers) ? cloudData.teachers.length : teachers.length;
+        const cCount = Array.isArray(cloudData.classes) ? cloudData.classes.length : classes.length;
+        showTermNotification(`✅ Đã nạp thành công dữ liệu mới nhất từ Cloud Firestore (${tCount} GV, ${cCount} Lớp, ràng buộc & TKB)!`);
       } else {
         showTermNotification(`⚠️ ${res.message}`);
       }
@@ -1939,15 +1942,10 @@ export default function App() {
     }
   };
 
-  // 2. HÀM GHI ĐẦY ĐỦ DỮ LIỆU LÊN CLOUD (Save/Push)
+  // 2. HÀM GHI ĐẦY ĐỦ DỮ LIỆU LÊN CLOUD (Save/Push toàn bộ state + ràng buộc + TKB)
   const handlePushAllToCloud = async () => {
     try {
-      const currentTimetable = (() => {
-        try {
-          const s = localStorage.getItem(`edu_timetable_${currentTermKey}`) || localStorage.getItem('edu_timetable_active');
-          return s ? JSON.parse(s) : null;
-        } catch { return null; }
-      })();
+      const snapshot = collectLocalSchoolSnapshot(currentTermKey);
 
       const res = await pushSchoolDataToCloud({
         teachers,
@@ -1955,12 +1953,25 @@ export default function App() {
         subjects: subjectsConfig,
         departments,
         assignments,
-        schedules: currentTimetable,
+        schedules: snapshot.timetableData ?? null,
+        timetableData: snapshot.timetableData ?? null,
         classSubjectPeriods,
+        classThreeConsecutivePeriods,
         classShifts,
+        sessionMode: snapshot.sessionMode,
+        afternoonPeriodsCount: snapshot.afternoonPeriodsCount,
+        lockedSlots: snapshot.lockedSlots,
+        customFixedSlots: snapshot.customFixedSlots,
+        teacherConstraints: snapshot.teacherConstraints,
+        advancedConstraints: snapshot.advancedConstraints,
+        availableYears,
+        lockedYears,
         schoolInfo,
         academicYear: currentAcademicYear,
-        semester: currentSemester
+        semester: currentSemester,
+        termKey: currentTermKey,
+        fullSync: true,
+        allowClearTimetable: true
       });
 
       if (res.success) {
@@ -1974,7 +1985,7 @@ export default function App() {
     }
   };
 
-  // NÚT 1: LƯU TRỰC TIẾP PHÂN CÔNG (HOMEROOM + SUBJECTS) LÊN CLOUD FIRESTORE
+  // NÚT 1: LƯU TRỰC TIẾP PHÂN CÔNG (HOMEROOM + SUBJECTS) LÊN CLOUD FIRESTORE (không ghi đè mất TKB/ràng buộc)
   const handleSaveAssignmentsToCloud = async () => {
     if (!isAdmin) {
       showTermNotification('⚠️ Cần quyền Quản trị viên để lưu phân công lên Cloud!');
@@ -2029,10 +2040,14 @@ export default function App() {
         departments,
         assignments: fullAssignPayload,
         classSubjectPeriods,
+        classThreeConsecutivePeriods,
         classShifts,
+        availableYears,
+        lockedYears,
         schoolInfo,
         academicYear: currentAcademicYear,
-        semester: currentSemester
+        semester: currentSemester,
+        termKey: currentTermKey
       });
 
       const subCount = Object.values(cleanSubject).reduce(
@@ -2041,7 +2056,7 @@ export default function App() {
       const hrCount = Object.keys(cleanHomeroom).length;
 
       if (res.success) {
-        showTermNotification(`☁️ Đã lưu thành công ${subCount} phân công môn học & ${hrCount} GVCN lên Cloud document "schools/thpt-nguyen-binh-khiem/terms/2026___2027_HK1"!`);
+        showTermNotification(`☁️ Đã lưu thành công ${subCount} phân công môn học & ${hrCount} GVCN lên Cloud Firestore!`);
       } else {
         showTermNotification(`⚠️ ${res.message}`);
       }
@@ -2355,10 +2370,10 @@ export default function App() {
           if (newAssignments) {
             payload.assignments = newAssignments;
           }
-          const cleanedData = removeUndefinedFields(payload);
+          const cleanedData = serializeForFirestoreDoc(payload);
           await Promise.all([
             setDoc(TARGET_TERM_DOC_REF, cleanedData, { merge: true }),
-            ...(newPeriods ? [setDoc(SCHOOL_DOC_REF, { classSubjectPeriods: removeUndefinedFields(newPeriods), updatedAt: new Date().toISOString() }, { merge: true })] : [])
+            ...(newPeriods ? [setDoc(SCHOOL_DOC_REF, serializeForFirestoreDoc({ classSubjectPeriods: newPeriods, updatedAt: new Date().toISOString() }), { merge: true })] : [])
           ]);
           invalidateTermCache(currentTermKey);
         }
@@ -5316,13 +5331,13 @@ export default function App() {
         localStorage.setItem('edu_classes', JSON.stringify(nextClasses));
         localStorage.setItem(`edu_term_classes_${currentTermKey}`, JSON.stringify(nextClasses));
         if (TARGET_TERM_DOC_REF) {
-          setDoc(TARGET_TERM_DOC_REF, removeUndefinedFields({
+          setDoc(TARGET_TERM_DOC_REF, serializeForFirestoreDoc({
             classes: nextClasses,
             updatedAt: new Date().toISOString()
           }), { merge: true });
         }
         if (SCHOOL_DOC_REF) {
-          setDoc(SCHOOL_DOC_REF, removeUndefinedFields({
+          setDoc(SCHOOL_DOC_REF, serializeForFirestoreDoc({
             classes: nextClasses,
             updatedAt: new Date().toISOString()
           }), { merge: true });
@@ -5389,7 +5404,7 @@ export default function App() {
         localStorage.setItem('edu_assignments', JSON.stringify(updatedAssignments));
         localStorage.setItem(`edu_term_assignments_${currentTermKey}`, JSON.stringify(updatedAssignments));
         if (TARGET_TERM_DOC_REF) {
-          setDoc(TARGET_TERM_DOC_REF, removeUndefinedFields({
+          setDoc(TARGET_TERM_DOC_REF, serializeForFirestoreDoc({
             assignments: updatedAssignments,
             updatedAt: new Date().toISOString()
           }), { merge: true });
@@ -5495,13 +5510,13 @@ export default function App() {
         localStorage.setItem('edu_classes', JSON.stringify(nextClasses));
         localStorage.setItem(`edu_term_classes_${currentTermKey}`, JSON.stringify(nextClasses));
         if (TARGET_TERM_DOC_REF) {
-          setDoc(TARGET_TERM_DOC_REF, removeUndefinedFields({
+          setDoc(TARGET_TERM_DOC_REF, serializeForFirestoreDoc({
             classes: nextClasses,
             updatedAt: new Date().toISOString()
           }), { merge: true });
         }
         if (SCHOOL_DOC_REF) {
-          setDoc(SCHOOL_DOC_REF, removeUndefinedFields({
+          setDoc(SCHOOL_DOC_REF, serializeForFirestoreDoc({
             classes: nextClasses,
             updatedAt: new Date().toISOString()
           }), { merge: true });
@@ -5554,7 +5569,7 @@ export default function App() {
         localStorage.setItem('edu_assignments', JSON.stringify(updatedAssignments));
         localStorage.setItem(`edu_term_assignments_${currentTermKey}`, JSON.stringify(updatedAssignments));
         if (TARGET_TERM_DOC_REF) {
-          setDoc(TARGET_TERM_DOC_REF, removeUndefinedFields({
+          setDoc(TARGET_TERM_DOC_REF, serializeForFirestoreDoc({
             assignments: updatedAssignments,
             updatedAt: new Date().toISOString()
           }), { merge: true });
@@ -5654,13 +5669,13 @@ export default function App() {
         localStorage.setItem('edu_classes', JSON.stringify(nextClasses));
         localStorage.setItem(`edu_term_classes_${currentTermKey}`, JSON.stringify(nextClasses));
         if (TARGET_TERM_DOC_REF) {
-          setDoc(TARGET_TERM_DOC_REF, removeUndefinedFields({
+          setDoc(TARGET_TERM_DOC_REF, serializeForFirestoreDoc({
             classes: nextClasses,
             updatedAt: new Date().toISOString()
           }), { merge: true });
         }
         if (SCHOOL_DOC_REF) {
-          setDoc(SCHOOL_DOC_REF, removeUndefinedFields({
+          setDoc(SCHOOL_DOC_REF, serializeForFirestoreDoc({
             classes: nextClasses,
             updatedAt: new Date().toISOString()
           }), { merge: true });
@@ -6300,7 +6315,7 @@ export default function App() {
         localStorage.setItem('edu_assignments', JSON.stringify(nextMerged));
         localStorage.setItem(`edu_term_assignments_${currentTermKey}`, JSON.stringify(nextMerged));
         if (TARGET_TERM_DOC_REF) {
-          setDoc(TARGET_TERM_DOC_REF, removeUndefinedFields({
+          setDoc(TARGET_TERM_DOC_REF, serializeForFirestoreDoc({
             assignments: nextMerged,
             updatedAt: new Date().toISOString()
           }), { merge: true });
@@ -6441,7 +6456,7 @@ export default function App() {
     try {
       localStorage.setItem('edu_subjects_config', JSON.stringify(nextSubjectsConfig));
       localStorage.setItem(`edu_term_subjects_${currentTermKey}`, JSON.stringify(nextSubjectsConfig));
-      setDoc(TARGET_TERM_DOC_REF, removeUndefinedFields({
+      setDoc(TARGET_TERM_DOC_REF, serializeForFirestoreDoc({
         subjects: nextSubjectsConfig,
         subjectsConfig: nextSubjectsConfig,
         updatedAt: new Date().toISOString()
@@ -6544,7 +6559,7 @@ export default function App() {
     try {
       localStorage.setItem('edu_subjects_config', JSON.stringify(nextSubjectsConfig));
       localStorage.setItem(`edu_term_subjects_${currentTermKey}`, JSON.stringify(nextSubjectsConfig));
-      setDoc(TARGET_TERM_DOC_REF, removeUndefinedFields({
+      setDoc(TARGET_TERM_DOC_REF, serializeForFirestoreDoc({
         subjects: nextSubjectsConfig,
         subjectsConfig: nextSubjectsConfig,
         updatedAt: new Date().toISOString()
@@ -6620,7 +6635,7 @@ export default function App() {
       try {
         localStorage.setItem('edu_subjects_config', JSON.stringify(next));
         localStorage.setItem(`edu_term_subjects_${currentTermKey}`, JSON.stringify(next));
-        setDoc(TARGET_TERM_DOC_REF, removeUndefinedFields({
+        setDoc(TARGET_TERM_DOC_REF, serializeForFirestoreDoc({
           subjects: next,
           subjectsConfig: next,
           updatedAt: new Date().toISOString()
@@ -6692,7 +6707,7 @@ export default function App() {
     try {
       localStorage.setItem('edu_departments', JSON.stringify(nextDepartments));
       localStorage.setItem(`edu_term_departments_${currentTermKey}`, JSON.stringify(nextDepartments));
-      await setDoc(TARGET_TERM_DOC_REF, removeUndefinedFields({
+      await setDoc(TARGET_TERM_DOC_REF, serializeForFirestoreDoc({
         departments: nextDepartments,
         updatedAt: new Date().toISOString()
       }), { merge: true });
@@ -6757,7 +6772,7 @@ export default function App() {
       localStorage.setItem('edu_teachers', JSON.stringify(nextTeachers));
       localStorage.setItem('edu_teachers_v3', JSON.stringify(nextTeachers));
 
-      await setDoc(TARGET_TERM_DOC_REF, removeUndefinedFields({
+      await setDoc(TARGET_TERM_DOC_REF, serializeForFirestoreDoc({
         departments: nextDepartments,
         subjects: nextSubjectsConfig,
         subjectsConfig: nextSubjectsConfig,
@@ -6816,7 +6831,7 @@ export default function App() {
         try {
           localStorage.setItem('edu_departments', JSON.stringify(nextDepartments));
           localStorage.setItem(`edu_term_departments_${currentTermKey}`, JSON.stringify(nextDepartments));
-          await setDoc(TARGET_TERM_DOC_REF, removeUndefinedFields({
+          await setDoc(TARGET_TERM_DOC_REF, serializeForFirestoreDoc({
             departments: nextDepartments,
             updatedAt: new Date().toISOString()
           }), { merge: true });
@@ -9636,19 +9651,17 @@ export default function App() {
               (async () => {
                 try {
                   if (TARGET_TERM_DOC_REF && SCHOOL_DOC_REF) {
-                    const payload: Record<string, any> = {
-                      classSubjectPeriods: removeUndefinedFields(nextPeriods),
-                      classShifts: removeUndefinedFields(classShifts),
-                      classThreeConsecutivePeriods: removeUndefinedFields(classThreeConsecutivePeriods),
+                    const payload: Record<string, any> = serializeForFirestoreDoc({
+                      classSubjectPeriods: nextPeriods,
+                      classShifts: classShifts,
+                      classThreeConsecutivePeriods: classThreeConsecutivePeriods,
                       allowThreeConsecutivePeriods,
+                      ...(hasAssignmentChanges && updatedAssignmentsPayload ? { assignments: updatedAssignmentsPayload } : {}),
                       updatedAt: new Date().toISOString()
-                    };
-                    if (hasAssignmentChanges && updatedAssignmentsPayload) {
-                      payload.assignments = removeUndefinedFields(updatedAssignmentsPayload);
-                    }
+                    });
                     await Promise.all([
                       setDoc(TARGET_TERM_DOC_REF, payload, { merge: true }),
-                      setDoc(SCHOOL_DOC_REF, { classSubjectPeriods: removeUndefinedFields(nextPeriods), updatedAt: new Date().toISOString() }, { merge: true })
+                      setDoc(SCHOOL_DOC_REF, serializeForFirestoreDoc({ classSubjectPeriods: nextPeriods, updatedAt: new Date().toISOString() }), { merge: true })
                     ]);
                     invalidateTermCache(currentTermKey);
                   }

@@ -15,7 +15,11 @@ import {
   pushSchoolDataToCloud,
   pullSchoolDataFromCloud,
   removeUndefinedFields,
-  sanitizeClassSubjectPeriods
+  sanitizeClassSubjectPeriods,
+  collectLocalSchoolSnapshot,
+  applyCloudDataToLocalStorage,
+  computeTermKeyFromYearAndSemester,
+  deserializeFirestoreTermData
 } from './firebaseSync';
 
 import { 
@@ -618,7 +622,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLoginModalOpen(true);
       return {
         success: false,
-        message: 'Bị từ chối: Cần đăng nhập Quản trị viên (Admin) để lưu hoặc ghi đè dữ liệu lên Google Sheets/Firebase.'
+        message: 'Bị từ chối: Cần đăng nhập Quản trị viên (Admin) để lưu hoặc ghi đè dữ liệu lên Cloud Firestore.'
       };
     }
 
@@ -626,82 +630,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setCloudConnectionStatus('syncing');
 
     try {
-      // 1. Gather all current term state from localStorage
-      const curYear = localStorage.getItem('edu_current_academic_year') || '2025 – 2026';
-      const curSem = localStorage.getItem('edu_current_semester') || 'Học kỳ I';
-      const cleanYear = curYear.replace(/[^0-9]/g, '_').replace(/^_+|_+$/g, '');
-      const semSuffix = curSem === 'Học kỳ II' ? 'HK2' : (curSem === 'Cả năm' ? 'CN' : 'HK1');
-      const termKey = `${cleanYear}_${semSuffix}`;
+      // 1. Gather complete current term snapshot (teachers, classes, assignments, periods, shifts, all scheduling constraints & timetable)
+      const snapshot = collectLocalSchoolSnapshot();
+      const curYear = snapshot.academicYear || '2025 – 2026';
+      const curSem = snapshot.semester || 'Học kỳ I';
+      const termKey = snapshot.termKey || computeTermKeyFromYearAndSemester(curYear, curSem);
 
-      // Local storage data extraction
-      let teachers: any[] = [];
-      let classes: any[] = [];
-      let subjectsConfig: any[] = [];
-      let classSubjectPeriods: any = {};
-      let classThreeConsecutivePeriods: any = {};
-      let assignments: any = { homeroomAssignments: {}, subjectAssignments: {} };
-      let timetableData: any = null;
-      let schoolInfo: any = null;
+      const teachers: any[] = snapshot.teachers || [];
+      const classes: any[] = snapshot.classes || [];
+      const subjectsConfig: any[] = snapshot.subjects || [];
+      const departments: any[] = snapshot.departments || [];
+      let classSubjectPeriods: any = snapshot.classSubjectPeriods || {};
+      const classThreeConsecutivePeriods: any = snapshot.classThreeConsecutivePeriods || {};
+      const assignments: any = snapshot.assignments || { homeroomAssignments: {}, subjectAssignments: {} };
+      const timetableData: any = snapshot.timetableData ?? null;
+      const schoolInfo: any = snapshot.schoolInfo || null;
+      const classShiftsData: any = snapshot.classShifts || {};
+
       let subjectDistribution: Record<string, Record<string, number>> = {};
       const defaultPeriodsByGrade: Record<string, Record<string, number>> = {
         '10': { 'Toán': 3, 'Lý': 2, 'Hóa': 2, 'Sinh': 2, 'Tin': 2, 'CNCN': 1, 'Văn': 3, 'Sử': 2, 'Địa': 2, 'GDKTPL': 2, 'Anh': 3, 'GDTC': 2, 'GDQPAN': 1, 'GDĐP': 1, 'TNHN1': 1, 'TNHN2': 1 },
         '11': { 'Toán': 3, 'Lý': 2, 'Hóa': 2, 'Sinh': 2, 'Tin': 2, 'CNCN': 1, 'Văn': 3, 'Sử': 2, 'Địa': 2, 'GDKTPL': 2, 'Anh': 3, 'GDTC': 2, 'GDQPAN': 1, 'GDĐP': 1, 'TNHN1': 1, 'TNHN2': 1 },
         '12': { 'Toán': 3, 'Lý': 2, 'Hóa': 2, 'Sinh': 2, 'Tin': 2, 'CNCN': 1, 'Văn': 3, 'Sử': 2, 'Địa': 2, 'GDKTPL': 2, 'Anh': 3, 'GDTC': 2, 'GDQPAN': 1, 'GDĐP': 1, 'TNHN1': 1, 'TNHN2': 1 },
       };
-      
 
       try {
-        const tStr = localStorage.getItem('edu_teachers');
-        if (tStr) teachers = JSON.parse(tStr);
-        const cStr = localStorage.getItem('edu_classes_v3') || localStorage.getItem('edu_classes');
-        if (cStr) classes = JSON.parse(cStr);
-        const sStr = localStorage.getItem('edu_subjects_config');
-        if (sStr) subjectsConfig = JSON.parse(sStr);
-        const cspStr = localStorage.getItem('edu_class_subject_periods_v2') || localStorage.getItem(`edu_term_class_periods_${termKey}`);
-        if (cspStr) classSubjectPeriods = JSON.parse(cspStr);
-        const c3Str = localStorage.getItem('edu_class_three_consecutive_v2');
-        if (c3Str) classThreeConsecutivePeriods = JSON.parse(c3Str);
-        // Ưu tiên nạp bản ghi phân công có subjectAssignments đầy đủ (> 0 phân công bộ môn)
-        let foundAssignments: any = null;
-        const assignKeys = [
-          'edu_assignments_v3',
-          'edu_assignments',
-          `edu_term_assignments_${termKey}`,
-          'edu_term_assignments_2026___2027_HK1'
-        ];
-        for (const k of assignKeys) {
-          try {
-            const raw = localStorage.getItem(k);
-            if (raw) {
-              const p = JSON.parse(raw);
-              const subCount = Object.values(p.subjectAssignments || {}).reduce(
-                (sum: number, cls: any) => sum + Object.keys(cls || {}).length, 0
-              );
-              if (subCount > 0) {
-                foundAssignments = p;
-                break;
-              } else if (!foundAssignments) {
-                foundAssignments = p;
-              }
-            }
-          } catch {}
-        }
-        if (foundAssignments) assignments = foundAssignments;
-        const tkbStr = localStorage.getItem(`edu_timetable_${termKey}`);
-        if (tkbStr) timetableData = JSON.parse(tkbStr);
-        const scStr = localStorage.getItem(`edu_term_school_info_${termKey}`) || localStorage.getItem('edu_school_info_v1');
-        if (scStr) schoolInfo = JSON.parse(scStr);
-        // Build complete 44-class matrix of subject periods ensuring no zero wipes
         const fullCsp: Record<string, any> = { ...classSubjectPeriods };
         subjectDistribution = {};
-
 
         classes.forEach((cls: any) => {
           if (!fullCsp[cls.id]) fullCsp[cls.id] = {};
           subjectDistribution[cls.id] = {};
           const gradeDef = defaultPeriodsByGrade[cls.grade] || defaultPeriodsByGrade['10'];
 
-          // Chỉ khởi tạo mặc định nếu lớp hoàn toàn chưa từng có dữ liệu cấu hình số tiết nào
           const hasExistingData = Object.keys(fullCsp[cls.id]).length > 0;
           if (!hasExistingData) {
             Object.keys(gradeDef).forEach(subId => {
@@ -727,32 +688,54 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           localStorage.setItem(`edu_term_subject_distribution_${termKey}`, JSON.stringify(subjectDistribution));
         } catch {}
       } catch (err) {
-        console.warn('Error reading local cache before sync:', err);
+        console.warn('Error preparing subject periods before sync:', err);
       }
 
-      // 2. Save directly to unified fixed document on Cloud Firestore (eduschedule_data/thpt_nguyen_binh_khiem)
-      let classShiftsData = null;
-      try {
-        const sh = localStorage.getItem('edu_class_shifts');
-        if (sh) classShiftsData = JSON.parse(sh);
-      } catch {}
-
       const cleanedClassSubjectPeriods = sanitizeClassSubjectPeriods(classSubjectPeriods);
+      const curriculumRulesPayload = {
+        standardGradeDefaults: defaultPeriodsByGrade,
+        matrix: subjectDistribution
+      };
 
+      // 2. Save complete payload to unified Cloud Firestore documents
       const fixedPushRes = await pushSchoolDataToCloud({
         teachers,
         classes,
         subjects: subjectsConfig,
+        departments,
         assignments,
         schedules: timetableData,
+        timetableData,
         classSubjectPeriods: cleanedClassSubjectPeriods,
+        subjectDistribution,
+        curriculumRules: curriculumRulesPayload,
+        classThreeConsecutivePeriods,
         classShifts: classShiftsData,
+        sessionMode: snapshot.sessionMode,
+        afternoonPeriodsCount: snapshot.afternoonPeriodsCount,
+        lockedSlots: snapshot.lockedSlots,
+        customFixedSlots: snapshot.customFixedSlots,
+        teacherConstraints: snapshot.teacherConstraints,
+        advancedConstraints: snapshot.advancedConstraints,
+        availableYears: snapshot.availableYears,
+        lockedYears: snapshot.lockedYears,
         schoolInfo,
         academicYear: curYear,
-        semester: curSem
+        semester: curSem,
+        termKey,
+        fullSync: true,
+        allowClearTimetable: true
       });
 
-      // Also backup to legacy multi-tenant collection as secondary copy
+      if (!fixedPushRes.success) {
+        setCloudConnectionStatus('error');
+        return {
+          success: false,
+          message: fixedPushRes.message
+        };
+      }
+
+      // Also backup to tenant/term subcollection
       try {
         await saveTermToFirestore(
           currentSchoolId,
@@ -763,15 +746,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             teachers,
             classes,
             subjectsConfig,
+            subjects: subjectsConfig,
+            departments,
             classSubjectPeriods: cleanedClassSubjectPeriods,
             subjectDistribution,
-            curriculumRules: {
-              standardGradeDefaults: defaultPeriodsByGrade,
-              matrix: subjectDistribution
-            },
+            curriculumRules: curriculumRulesPayload,
             classThreeConsecutivePeriods,
+            classShifts: classShiftsData,
             assignments,
             timetableData,
+            schedules: timetableData,
+            lockedSlots: snapshot.lockedSlots,
+            timetableLockedSlots: snapshot.lockedSlots,
+            customFixedSlots: snapshot.customFixedSlots,
+            teacherConstraints: snapshot.teacherConstraints,
+            advancedConstraints: snapshot.advancedConstraints,
+            sessionMode: snapshot.sessionMode,
+            afternoonPeriodsCount: snapshot.afternoonPeriodsCount,
+            availableYears: snapshot.availableYears,
+            lockedYears: snapshot.lockedYears,
             schoolInfo
           },
           currentUser?.displayName || 'Admin'
@@ -813,7 +806,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       return {
         success: true,
-        message: `Đã lưu thành công 101 GV, 44 Lớp và TKB lên Cloud Firestore lúc ${now}!`,
+        message: fixedPushRes.message || `Đã lưu thành công dữ liệu (${teachers.length} GV, ${classes.length} Lớp, ràng buộc & TKB) lên Cloud Firestore lúc ${now}!`,
         timestamp: now
       };
     } catch (e: any) {
@@ -828,77 +821,59 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   /**
-   * Fetch latest data from Cloud Firestore for the current term and school
+   * Fetch latest data from Cloud Firestore for the current term and school (bypassing stale cache)
    */
   const fetchFromCloud = async (): Promise<{ success: boolean; message: string; data?: any }> => {
     setIsSyncing(true);
     setCloudConnectionStatus('syncing');
 
     try {
-      const curYear = localStorage.getItem('edu_current_academic_year') || '2026 – 2027';
+      const curYear = localStorage.getItem('edu_current_academic_year') || '2025 – 2026';
       const curSem = localStorage.getItem('edu_current_semester') || 'Học kỳ I';
-      const cleanYear = curYear.replace(/[^0-9]/g, '_').replace(/^_+|_+$/g, '');
-      const semSuffix = curSem === 'Học kỳ II' ? 'HK2' : (curSem === 'Cả năm' ? 'CN' : 'HK1');
-      const termKey = `${cleanYear}_${semSuffix}`;
+      const termKey = computeTermKeyFromYearAndSemester(curYear, curSem);
 
-      // 1. Read from unified fixed document (eduschedule_data/thpt_nguyen_binh_khiem)
-      const pullResult = await pullSchoolDataFromCloud();
+      // 1. Always force-refresh from Firestore (bỏ qua in-memory cache)
+      const pullResult = await pullSchoolDataFromCloud(true);
       if (pullResult.success && pullResult.data) {
         const cloudData = pullResult.data;
         const now = cloudData.lastUpdatedText || new Date().toLocaleString('vi-VN');
 
-        // Cache to localStorage
-        if (cloudData.teachers) localStorage.setItem('edu_teachers', JSON.stringify(cloudData.teachers));
-        if (cloudData.classes) localStorage.setItem('edu_classes_v3', JSON.stringify(cloudData.classes));
-        if (cloudData.subjects) localStorage.setItem('edu_subjects_config', JSON.stringify(cloudData.subjects));
-        if (cloudData.assignments) {
-          localStorage.setItem('edu_assignments_v3', JSON.stringify(cloudData.assignments));
-          localStorage.setItem(`edu_term_assignments_${termKey}`, JSON.stringify(cloudData.assignments));
-        }
-        if (cloudData.schedules) {
-          localStorage.setItem(`edu_timetable_${termKey}`, JSON.stringify(cloudData.schedules));
-          localStorage.setItem('edu_timetable_active', JSON.stringify(cloudData.schedules));
-        }
-        if (cloudData.classSubjectPeriods) localStorage.setItem('edu_class_subject_periods_v2', JSON.stringify(cloudData.classSubjectPeriods));
-        if (cloudData.classShifts) localStorage.setItem('edu_class_shifts', JSON.stringify(cloudData.classShifts));
-        if (cloudData.schoolInfo) localStorage.setItem('edu_school_info_v1', JSON.stringify(cloudData.schoolInfo));
+        // Overwrite ALL localStorage keys cleanly (GV, Lớp, Phân công, Ràng buộc, TKB, SchoolInfo...)
+        applyCloudDataToLocalStorage(cloudData, termKey);
 
         localStorage.setItem('edu_last_cloud_synced_at', now);
         setLastSyncedAt(now);
         setCloudConnectionStatus('connected');
 
-        // Broadcast event so active views immediately re-render
+        // Broadcast events so App & TimetableTab immediately overwrite React states
+        const resolvedSchedule = cloudData.timetableData !== undefined ? cloudData.timetableData : (cloudData.schedules ?? null);
         window.dispatchEvent(new CustomEvent('cloud-data-pulled', { detail: cloudData }));
+        window.dispatchEvent(new CustomEvent('edu_timetable_updated', { detail: resolvedSchedule }));
 
         return {
           success: true,
-          message: `Đã nạp toàn bộ 101 GV, 44 Lớp và TKB từ Cloud Firestore lúc ${now}!`,
+          message: `Đã nạp toàn bộ dữ liệu (GV, Lớp, Phân công, Ràng buộc & TKB) từ Cloud Firestore lúc ${now}!`,
           data: cloudData
         };
       }
 
-      // 2. Fallback to legacy term document if unified document was not found
+      // 2. Fallback to tenant term document if unified document was not found
       const termDocRef = doc(db, 'schools', currentSchoolId, 'terms', termKey);
       const termSnap = await getDoc(termDocRef);
 
       if (termSnap.exists()) {
-        const termData = termSnap.data();
-        const now = termData.updatedAt ? new Date(termData.updatedAt).toLocaleString('vi-VN') : new Date().toLocaleString('vi-VN');
-        
-        // Cache to localStorage
-        if (termData.teachers) localStorage.setItem('edu_teachers', JSON.stringify(termData.teachers));
-        if (termData.classes) localStorage.setItem('edu_classes_v3', JSON.stringify(termData.classes));
-        if (termData.subjectsConfig) localStorage.setItem('edu_subjects_config', JSON.stringify(termData.subjectsConfig));
-        if (termData.assignments) localStorage.setItem(`edu_term_assignments_${termKey}`, JSON.stringify(termData.assignments));
-        if (termData.classSubjectPeriods) localStorage.setItem(`edu_term_class_periods_${termKey}`, JSON.stringify(termData.classSubjectPeriods));
-        if (termData.timetableData) localStorage.setItem(`edu_timetable_${termKey}`, JSON.stringify(termData.timetableData));
-        if (termData.schoolInfo) localStorage.setItem('edu_school_info_v1', JSON.stringify(termData.schoolInfo));
+        const termData = deserializeFirestoreTermData(termSnap.data());
+        const now = termData.lastUpdatedText || (termData.updatedAt ? new Date(termData.updatedAt).toLocaleString('vi-VN') : new Date().toLocaleString('vi-VN'));
+
+        applyCloudDataToLocalStorage(termData, termKey);
 
         localStorage.setItem('edu_last_cloud_synced_at', now);
         setLastSyncedAt(now);
         setCloudConnectionStatus('connected');
 
+        const resolvedSchedule = termData.timetableData !== undefined ? termData.timetableData : (termData.schedules ?? null);
         window.dispatchEvent(new CustomEvent('cloud-data-pulled', { detail: termData }));
+        window.dispatchEvent(new CustomEvent('edu_timetable_updated', { detail: resolvedSchedule }));
 
         return {
           success: true,
@@ -907,7 +882,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
       }
 
-      // 2. Fallback to server snapshot if term document isn't in Firestore yet
+      // 3. Fallback to server snapshot if term document isn't in Firestore yet
       const response = await fetch('/api/cloud/latest');
       if (response.ok) {
         const resData = await response.json();

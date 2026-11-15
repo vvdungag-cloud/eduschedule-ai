@@ -132,12 +132,107 @@ export const TimetableTab: React.FC<TimetableTabProps> = ({
     } catch (e) {}
   }, [storageKey]);
 
-  // Đồng bộ khi có sự kiện nạp dữ liệu từ Cloud (khi bấm Làm mới)
+  // Đồng bộ toàn bộ TKB & tất cả Ràng buộc xếp lịch khi có sự kiện nạp dữ liệu từ Cloud
   useEffect(() => {
     const handleCustomPull = (e: any) => {
-      if (e.detail?.schedules) {
-        const sanitized = sanitizeLoadedTimetable(e.detail.schedules);
-        setTimetableData(sanitized);
+      const cloudData = e?.detail;
+      if (!cloudData || typeof cloudData !== 'object') return;
+
+      // 1. Kết quả Thời khóa biểu
+      const hasSchedule = cloudData.timetableData !== undefined || cloudData.schedules !== undefined;
+      if (hasSchedule) {
+        const rawSchedule = cloudData.timetableData !== undefined ? cloudData.timetableData : cloudData.schedules;
+        if (rawSchedule === null) {
+          setTimetableData(null);
+          try {
+            localStorage.removeItem(storageKey);
+            localStorage.removeItem('edu_timetable_active');
+          } catch {}
+        } else if (rawSchedule) {
+          const sanitized = sanitizeLoadedTimetable(rawSchedule);
+          setTimetableData(sanitized);
+          if (sanitized) {
+            try {
+              localStorage.setItem(storageKey, JSON.stringify(sanitized));
+              localStorage.setItem('edu_timetable_active', JSON.stringify(sanitized));
+            } catch {}
+          }
+        }
+      }
+
+      // 2. Tiết bận GV / Tiết tránh / Khóa ô / Ngoại lệ lớp
+      const rawLocked = cloudData.lockedSlots || cloudData.timetableLockedSlots;
+      if (rawLocked && typeof rawLocked === 'object') {
+        const sanitizedLocked = sanitizeLockedSlotsConfig(rawLocked);
+        setLockedSlots(sanitizedLocked);
+        try {
+          localStorage.setItem(`edu_locked_slots_${currentTermKey}`, JSON.stringify(sanitizedLocked));
+        } catch {}
+      }
+
+      // 3. Tiết cố định
+      if (Array.isArray(cloudData.customFixedSlots)) {
+        setCustomFixedSlots(cloudData.customFixedSlots);
+        try {
+          localStorage.setItem(`edu_custom_fixed_slots_${currentTermKey}`, JSON.stringify(cloudData.customFixedSlots));
+        } catch {}
+      }
+
+      // 4. Ràng buộc số ngày / số buổi dạy của GV
+      if (cloudData.teacherConstraints && typeof cloudData.teacherConstraints === 'object') {
+        setTeacherConstraints(cloudData.teacherConstraints);
+        try {
+          localStorage.setItem(`edu_teacher_constraints_${currentTermKey}`, JSON.stringify(cloudData.teacherConstraints));
+        } catch {}
+      }
+
+      // 5. Quy tắc chuyên môn nâng cao
+      if (cloudData.advancedConstraints && typeof cloudData.advancedConstraints === 'object') {
+        const parsed = cloudData.advancedConstraints;
+        const defaultConsecutivePairs = [
+          { id: 'pair_gddp_gdqpan', subject1: 'GDĐP', subject2: 'GDQPAN', enabled: true }
+        ];
+        const defaultNotSamePairs = [
+          { id: 'pair_gdtc_gdqpan', subject1: 'GDTC', subject2: 'GDQPAN', enabled: true },
+          { id: 'pair_gdtc_gddp', subject1: 'GDTC', subject2: 'GDĐP', enabled: true }
+        ];
+        const normalizedAdv = {
+          ...parsed,
+          teacherMeetingSubject: parsed.teacherMeetingSubject || '',
+          teacherMeetingRules: Array.isArray(parsed.teacherMeetingRules) ? parsed.teacherMeetingRules : [],
+          lessonEndsOnly: Array.isArray(parsed.lessonEndsOnly) ? parsed.lessonEndsOnly : [],
+          lessonStartsOnly: Array.isArray(parsed.lessonStartsOnly) ? parsed.lessonStartsOnly : ['Chào cờ'],
+          lessonConsecutiveSubjects: Array.isArray(parsed.lessonConsecutiveSubjects) ? parsed.lessonConsecutiveSubjects : [],
+          lessonSameSessionSubjects: Array.isArray(parsed.lessonSameSessionSubjects) ? parsed.lessonSameSessionSubjects : [],
+          lessonNotSameSessionSubjects: Array.isArray(parsed.lessonNotSameSessionSubjects) ? parsed.lessonNotSameSessionSubjects : [],
+          lessonConsecutivePairs: Array.isArray(parsed.lessonConsecutivePairs) ? parsed.lessonConsecutivePairs : defaultConsecutivePairs,
+          lessonNotSameSessionPairs: Array.isArray(parsed.lessonNotSameSessionPairs) ? parsed.lessonNotSameSessionPairs : defaultNotSamePairs,
+          subjectNoRoom: Array.isArray(parsed.subjectNoRoom) ? parsed.subjectNoRoom : ['Thể dục', 'GDQPAN']
+        };
+        setAdvancedConstraints(normalizedAdv);
+        try {
+          localStorage.setItem(`edu_advanced_constraints_${currentTermKey}`, JSON.stringify(normalizedAdv));
+        } catch {}
+      }
+
+      // 6. Cấu hình buổi học & ca học của lớp
+      if (cloudData.sessionMode === 'double' || cloudData.sessionMode === 'single') {
+        setSessionMode(cloudData.sessionMode);
+        try {
+          localStorage.setItem(`edu_session_mode_${currentTermKey}`, cloudData.sessionMode);
+        } catch {}
+      }
+      if (cloudData.afternoonPeriodsCount === 4 || cloudData.afternoonPeriodsCount === 5) {
+        setAfternoonPeriodsCount(cloudData.afternoonPeriodsCount);
+        try {
+          localStorage.setItem(`edu_afternoon_periods_${currentTermKey}`, String(cloudData.afternoonPeriodsCount));
+        } catch {}
+      }
+      if (cloudData.classShifts && typeof cloudData.classShifts === 'object') {
+        setLocalClassShifts(cloudData.classShifts);
+        try {
+          localStorage.setItem(`edu_class_shifts_${currentTermKey}`, JSON.stringify(cloudData.classShifts));
+        } catch {}
       }
     };
     window.addEventListener('cloud-data-pulled', handleCustomPull);
@@ -145,7 +240,7 @@ export const TimetableTab: React.FC<TimetableTabProps> = ({
     return () => {
       window.removeEventListener('cloud-data-pulled', handleCustomPull);
     };
-  }, [storageKey]);
+  }, [storageKey, currentTermKey]);
 
   // Lắng nghe sự kiện cập nhật TKB từ App.tsx (khi phân công thay đổi, xóa, hoặc giải lại)
   useEffect(() => {
@@ -2180,6 +2275,8 @@ export const TimetableTab: React.FC<TimetableTabProps> = ({
     if (window.confirm('Bạn có chắc chắn muốn xóa Thời khóa biểu hiện tại không?')) {
       setTimetableData(null);
       localStorage.removeItem(storageKey);
+      localStorage.removeItem('edu_timetable_active');
+      window.dispatchEvent(new CustomEvent('edu_timetable_updated', { detail: null }));
       setSolverNotice(null);
     }
   };

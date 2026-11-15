@@ -1,5 +1,5 @@
 import { 
-  collection, doc, getDoc, setDoc, deleteDoc, 
+  collection, doc, getDoc, setDoc, deleteDoc, deleteField,
   onSnapshot, getDocs, Unsubscribe, serverTimestamp 
 } from 'firebase/firestore';
 import { db } from './firebase';
@@ -56,6 +56,115 @@ export function removeUndefinedFields(obj: any): any {
 }
 
 /**
+ * Các trường dữ liệu lớn / lồng nhau trên Firestore (/schools/.../terms/... và eduschedule_data/...)
+ * Được tuần tự hóa thành JSON string khi ghi (JSON.stringify) để tránh vượt giới hạn 40.000 index entries của Firestore,
+ * và tự động giải nén (JSON.parse) khi đọc (tương thích ngược cả dữ liệu cũ dạng Object/Array).
+ */
+export const SERIALIZED_TERM_FIELDS = new Set<string>([
+  'teachers',
+  'classes',
+  'subjects',
+  'subjectsConfig',
+  'departments',
+  'assignments',
+  'timetableData',
+  'schedules',
+  'classSubjectPeriods',
+  'subjectDistribution',
+  'curriculumRules',
+  'classThreeConsecutivePeriods',
+  'classShifts',
+  'lockedSlots',
+  'timetableLockedSlots',
+  'customFixedSlots',
+  'teacherConstraints',
+  'advancedConstraints',
+  'availableYears',
+  'lockedYears',
+  'schoolInfo'
+]);
+
+function isFirestoreSpecialValue(v: any): boolean {
+  if (!v || typeof v !== 'object') return false;
+  if (v instanceof Date) return true;
+  if (typeof v.isEqual === 'function' || typeof v.toDate === 'function' || v._methodName) return true;
+  return false;
+}
+
+/**
+ * Tuần tự hóa MỌI trường dữ liệu dạng Object/Array (trừ Date / Firestore FieldValue / Timestamp)
+ * thành JSON string trước khi ghi lên Firestore bằng setDoc(), giúp tổng số index entries luôn < 50.
+ */
+export function serializeForFirestoreDoc<T extends Record<string, any>>(payload: T): Record<string, any> {
+  const cleaned = removeUndefinedFields(payload);
+  if (!cleaned || typeof cleaned !== 'object') return cleaned;
+
+  const serialized: Record<string, any> = {};
+  for (const [k, v] of Object.entries(cleaned)) {
+    if (v !== null && v !== undefined && typeof v === 'object' && !isFirestoreSpecialValue(v)) {
+      try {
+        serialized[k] = JSON.stringify(v);
+      } catch {
+        serialized[k] = v;
+      }
+    } else {
+      serialized[k] = v;
+    }
+  }
+  return serialized;
+}
+
+/**
+ * Giải nén các trường JSON string từ Firestore (getDoc / onSnapshot) về lại Object/Array.
+ * Vẫn giữ nguyên tương thích ngược nếu dữ liệu cũ trên Cloud đang ở dạng Object/Array trực tiếp,
+ * đồng thời tự động đồng bộ các khóa alias (timetableData <-> schedules, subjects <-> subjectsConfig, lockedSlots <-> timetableLockedSlots).
+ */
+export function deserializeFirestoreTermData<T = any>(raw: T): T {
+  if (!raw || typeof raw !== 'object') return raw;
+
+  const out: Record<string, any> = { ...(raw as Record<string, any>) };
+  for (const [field, initialVal] of Object.entries(out)) {
+    let val = initialVal;
+    if (typeof val === 'string') {
+      const trimmed = val.trim();
+      const looksLikeJson =
+        (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+        (trimmed.startsWith('[') && trimmed.endsWith(']')) ||
+        (SERIALIZED_TERM_FIELDS.has(field) && (trimmed === 'null' || trimmed.startsWith('"')));
+      if (looksLikeJson) {
+        for (let attempt = 0; attempt < 2 && typeof val === 'string'; attempt++) {
+          try {
+            val = JSON.parse(val);
+          } catch {
+            break;
+          }
+        }
+        out[field] = val;
+      }
+    }
+  }
+
+  // Bảo toàn tính tương thích giữa các tên trường alias
+  if (out.timetableData !== undefined && out.schedules === undefined) {
+    out.schedules = out.timetableData;
+  } else if (out.schedules !== undefined && out.timetableData === undefined) {
+    out.timetableData = out.schedules;
+  }
+  if (out.subjects !== undefined && out.subjectsConfig === undefined) {
+    out.subjectsConfig = out.subjects;
+  } else if (out.subjectsConfig !== undefined && out.subjects === undefined) {
+    out.subjects = out.subjectsConfig;
+  }
+  if (out.lockedSlots !== undefined && out.timetableLockedSlots === undefined) {
+    out.timetableLockedSlots = out.lockedSlots;
+  } else if (out.timetableLockedSlots !== undefined && out.lockedSlots === undefined) {
+    out.lockedSlots = out.timetableLockedSlots;
+  }
+
+  return out as T;
+}
+
+/**
  * Chuẩn hóa và làm sạch cấu hình số tiết classSubjectPeriods:
  * Đảm bảo trường maxPeriodsPerSession luôn là null hoặc number, tuyệt đối không mang undefined
  */
@@ -91,99 +200,498 @@ export function sanitizeClassSubjectPeriods(csp: any): Record<string, Record<str
   return cleaned;
 }
 
+export function computeTermKeyFromYearAndSemester(year?: string, semester?: string): string {
+  const normalizedYear = normalizeAcademicYearString(year || '2025 – 2026');
+  const cleanYear = normalizedYear.replace(/[^0-9]/g, '_').replace(/^_+|_+$/g, '') || '2025___2026';
+  const s = (semester || 'Học kỳ I').toLowerCase();
+  const semSuffix = s.includes('ii') || s.includes('2')
+    ? 'HK2'
+    : (s.includes('cả năm') || s.includes('ca nam') ? 'CN' : 'HK1');
+  return `${cleanYear}_${semSuffix}`;
+}
+
+export function normalizeAcademicYearString(year?: string): string {
+  if (!year) return '2025 – 2026';
+  const match = String(year).match(/(\d{4})\D+(\d{4})/);
+  if (match) {
+    return `${match[1]} – ${match[2]}`;
+  }
+  return String(year).replace(/^Năm học\s+/i, '').trim() || '2025 – 2026';
+}
+
+function safeParseJson<T = any>(raw: string | null): T | undefined {
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+function getUtf8ByteSize(data: any): number {
+  try {
+    const json = JSON.stringify(data);
+    if (typeof TextEncoder !== 'undefined') {
+      return new TextEncoder().encode(json).length;
+    }
+    return json.length * 2;
+  } catch {
+    return 0;
+  }
+}
+
 /**
- * Ghi toàn bộ dữ liệu (101 GV, 44 Lớp, Phân công đầy đủ cả homeroomAssignments & subjectAssignments, TKB) lên Firestore
+ * Thu thập toàn bộ state hiện có trong localStorage để đồng bộ đầy đủ lên Cloud Firestore
+ */
+export function collectLocalSchoolSnapshot(preferredTermKey?: string): {
+  academicYear: string;
+  semester: string;
+  termKey: string;
+  teachers?: any[];
+  classes?: any[];
+  subjects?: any[];
+  departments?: any[];
+  assignments?: any;
+  classSubjectPeriods?: any;
+  classThreeConsecutivePeriods?: any;
+  classShifts?: any;
+  sessionMode?: string;
+  afternoonPeriodsCount?: number;
+  lockedSlots?: any;
+  customFixedSlots?: any[];
+  teacherConstraints?: any;
+  advancedConstraints?: any;
+  timetableData?: any;
+  schoolInfo?: any;
+  availableYears?: string[];
+  lockedYears?: Record<string, boolean>;
+} {
+  const curYearRaw = localStorage.getItem('edu_current_academic_year') || '2025 – 2026';
+  const curYear = normalizeAcademicYearString(curYearRaw);
+  const curSem = localStorage.getItem('edu_current_semester') || 'Học kỳ I';
+  const computedKey = computeTermKeyFromYearAndSemester(curYear, curSem);
+  const candidateKeys = Array.from(new Set([preferredTermKey, computedKey, TARGET_TERM_KEY].filter(Boolean) as string[]));
+
+  const readFirstTermKey = <T = any>(prefix: string, extraKeys: string[] = []): T | undefined => {
+    for (const tk of candidateKeys) {
+      const parsed = safeParseJson<T>(localStorage.getItem(`${prefix}${tk}`));
+      if (parsed !== undefined) return parsed;
+    }
+    for (const ek of extraKeys) {
+      const parsed = safeParseJson<T>(localStorage.getItem(ek));
+      if (parsed !== undefined) return parsed;
+    }
+    return undefined;
+  };
+
+  const teachers = safeParseJson<any[]>(localStorage.getItem('edu_teachers'))
+    || safeParseJson<any[]>(localStorage.getItem('edu_teachers_v3'));
+
+  const classes = safeParseJson<any[]>(localStorage.getItem('edu_classes_v3'))
+    || safeParseJson<any[]>(localStorage.getItem('edu_classes'))
+    || readFirstTermKey<any[]>('edu_term_classes_');
+
+  const subjects = safeParseJson<any[]>(localStorage.getItem('edu_subjects_config'))
+    || readFirstTermKey<any[]>('edu_term_subjects_');
+
+  const departments = safeParseJson<any[]>(localStorage.getItem('edu_departments'))
+    || readFirstTermKey<any[]>('edu_term_departments_');
+
+  let assignments: any;
+  const assignCandidates = [
+    'edu_assignments_v3',
+    'edu_assignments',
+    ...candidateKeys.map(tk => `edu_term_assignments_${tk}`)
+  ];
+  for (const k of assignCandidates) {
+    const parsed = safeParseJson<any>(localStorage.getItem(k));
+    if (parsed && typeof parsed === 'object') {
+      const subCount = Object.values(parsed.subjectAssignments || {}).reduce(
+        (sum: number, cls: any) => sum + Object.keys(cls || {}).length, 0
+      );
+      if (subCount > 0) {
+        assignments = parsed;
+        break;
+      } else if (!assignments) {
+        assignments = parsed;
+      }
+    }
+  }
+
+  const classSubjectPeriods = safeParseJson<any>(localStorage.getItem('edu_class_subject_periods_v2'))
+    || readFirstTermKey<any>('edu_term_class_periods_');
+
+  const classThreeConsecutivePeriods = safeParseJson<any>(localStorage.getItem('edu_class_three_consecutive_v2'))
+    || safeParseJson<any>(localStorage.getItem('edu_class_three_consecutive_periods'));
+
+  const classShifts = readFirstTermKey<any>('edu_class_shifts_', ['edu_class_shifts']);
+
+  let sessionMode: string | undefined;
+  for (const tk of candidateKeys) {
+    const raw = localStorage.getItem(`edu_session_mode_${tk}`);
+    if (raw === 'double' || raw === 'single') {
+      sessionMode = raw;
+      break;
+    }
+  }
+
+  let afternoonPeriodsCount: number | undefined;
+  for (const tk of candidateKeys) {
+    const raw = localStorage.getItem(`edu_afternoon_periods_${tk}`);
+    if (raw) {
+      const n = parseInt(raw, 10);
+      if (n === 4 || n === 5) {
+        afternoonPeriodsCount = n;
+        break;
+      }
+    }
+  }
+
+  const lockedSlots = readFirstTermKey<any>('edu_locked_slots_', ['edu_timetable_locked_slots_v1', 'edu_locked_slots_v1']);
+  const customFixedSlots = readFirstTermKey<any[]>('edu_custom_fixed_slots_');
+  const teacherConstraints = readFirstTermKey<any>('edu_teacher_constraints_');
+  const advancedConstraints = readFirstTermKey<any>('edu_advanced_constraints_');
+
+  // Đối với TKB, ưu tiên đọc theo học kỳ đang chọn (không fallback sang TARGET_TERM_KEY nếu người dùng vừa xóa TKB ở học kỳ hiện tại)
+  const primaryTk = preferredTermKey || computedKey;
+  let timetableData: any = null;
+  if (localStorage.getItem(`edu_timetable_${primaryTk}`) !== null) {
+    timetableData = safeParseJson<any>(localStorage.getItem(`edu_timetable_${primaryTk}`)) ?? null;
+  } else if (localStorage.getItem('edu_timetable_active') !== null) {
+    timetableData = safeParseJson<any>(localStorage.getItem('edu_timetable_active')) ?? null;
+  }
+
+  const schoolInfo = readFirstTermKey<any>('edu_term_school_info_', ['edu_school_info_v1']);
+  const availableYears = safeParseJson<string[]>(localStorage.getItem('edu_available_years'));
+  const lockedYears = safeParseJson<Record<string, boolean>>(localStorage.getItem('edu_locked_years'));
+
+  return {
+    academicYear: curYear,
+    semester: curSem,
+    termKey: primaryTk,
+    teachers,
+    classes,
+    subjects,
+    departments,
+    assignments,
+    classSubjectPeriods,
+    classThreeConsecutivePeriods,
+    classShifts,
+    sessionMode,
+    afternoonPeriodsCount,
+    lockedSlots,
+    customFixedSlots,
+    teacherConstraints,
+    advancedConstraints,
+    timetableData,
+    schoolInfo,
+    availableYears,
+    lockedYears
+  };
+}
+
+/**
+ * Nạp đè toàn bộ dữ liệu từ Cloud Firestore vào localStorage trên máy hiện tại (hoặc thiết bị mới)
+ */
+export function applyCloudDataToLocalStorage(cloudData: any, currentTermKey?: string): void {
+  if (!cloudData || typeof cloudData !== 'object' || typeof window === 'undefined') return;
+
+  const cloudYear = cloudData.academicYear ? normalizeAcademicYearString(cloudData.academicYear) : undefined;
+  const cloudSem = cloudData.semester || undefined;
+  const cloudTermKey = cloudData.termKey || (cloudYear && cloudSem ? computeTermKeyFromYearAndSemester(cloudYear, cloudSem) : undefined);
+
+  const termKeys = Array.from(new Set([currentTermKey, cloudTermKey, TARGET_TERM_KEY].filter(Boolean) as string[]));
+
+  const safeSet = (key: string, value: any) => {
+    try {
+      localStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value));
+    } catch (e) {
+      console.warn(`[Cloud Hydrate] Failed writing localStorage key ${key}:`, e);
+    }
+  };
+
+  if (Array.isArray(cloudData.teachers) && cloudData.teachers.length > 0) {
+    safeSet('edu_teachers', cloudData.teachers);
+    safeSet('edu_teachers_v3', cloudData.teachers);
+  }
+
+  if (Array.isArray(cloudData.classes) && cloudData.classes.length > 0) {
+    safeSet('edu_classes_v3', cloudData.classes);
+    safeSet('edu_classes', cloudData.classes);
+    termKeys.forEach(tk => safeSet(`edu_term_classes_${tk}`, cloudData.classes));
+  }
+
+  const resolvedSubjects = Array.isArray(cloudData.subjects) && cloudData.subjects.length > 0
+    ? cloudData.subjects
+    : (Array.isArray(cloudData.subjectsConfig) && cloudData.subjectsConfig.length > 0 ? cloudData.subjectsConfig : undefined);
+  if (resolvedSubjects) {
+    safeSet('edu_subjects_config', resolvedSubjects);
+    termKeys.forEach(tk => safeSet(`edu_term_subjects_${tk}`, resolvedSubjects));
+  }
+
+  if (Array.isArray(cloudData.departments) && cloudData.departments.length > 0) {
+    safeSet('edu_departments', cloudData.departments);
+    termKeys.forEach(tk => safeSet(`edu_term_departments_${tk}`, cloudData.departments));
+  }
+
+  if (cloudData.assignments && typeof cloudData.assignments === 'object') {
+    const cloudSubCount = Object.values(cloudData.assignments.subjectAssignments || {}).reduce(
+      (sum: number, cls: any) => sum + Object.keys(cls || {}).length, 0
+    );
+    if (cloudSubCount > 0 || (cloudData.assignments.homeroomAssignments && Object.keys(cloudData.assignments.homeroomAssignments).length > 0)) {
+      safeSet('edu_assignments_v3', cloudData.assignments);
+      safeSet('edu_assignments', cloudData.assignments);
+      termKeys.forEach(tk => safeSet(`edu_term_assignments_${tk}`, cloudData.assignments));
+    }
+  }
+
+  if (cloudData.classSubjectPeriods && typeof cloudData.classSubjectPeriods === 'object') {
+    safeSet('edu_class_subject_periods_v2', cloudData.classSubjectPeriods);
+    termKeys.forEach(tk => safeSet(`edu_term_class_periods_${tk}`, cloudData.classSubjectPeriods));
+  }
+
+  if (cloudData.subjectDistribution && typeof cloudData.subjectDistribution === 'object') {
+    termKeys.forEach(tk => safeSet(`edu_term_subject_distribution_${tk}`, cloudData.subjectDistribution));
+  }
+
+  if (cloudData.classThreeConsecutivePeriods && typeof cloudData.classThreeConsecutivePeriods === 'object') {
+    safeSet('edu_class_three_consecutive_v2', cloudData.classThreeConsecutivePeriods);
+    safeSet('edu_class_three_consecutive_periods', cloudData.classThreeConsecutivePeriods);
+  }
+
+  if (cloudData.classShifts && typeof cloudData.classShifts === 'object') {
+    safeSet('edu_class_shifts', cloudData.classShifts);
+    termKeys.forEach(tk => safeSet(`edu_class_shifts_${tk}`, cloudData.classShifts));
+  }
+
+  if (cloudData.sessionMode === 'double' || cloudData.sessionMode === 'single') {
+    termKeys.forEach(tk => safeSet(`edu_session_mode_${tk}`, cloudData.sessionMode));
+  }
+
+  if (cloudData.afternoonPeriodsCount === 4 || cloudData.afternoonPeriodsCount === 5) {
+    termKeys.forEach(tk => safeSet(`edu_afternoon_periods_${tk}`, String(cloudData.afternoonPeriodsCount)));
+  }
+
+  const resolvedLockedSlots = cloudData.lockedSlots || cloudData.timetableLockedSlots;
+  if (resolvedLockedSlots && typeof resolvedLockedSlots === 'object') {
+    termKeys.forEach(tk => safeSet(`edu_locked_slots_${tk}`, resolvedLockedSlots));
+  }
+
+  if (Array.isArray(cloudData.customFixedSlots)) {
+    termKeys.forEach(tk => safeSet(`edu_custom_fixed_slots_${tk}`, cloudData.customFixedSlots));
+  }
+
+  if (cloudData.teacherConstraints && typeof cloudData.teacherConstraints === 'object') {
+    termKeys.forEach(tk => safeSet(`edu_teacher_constraints_${tk}`, cloudData.teacherConstraints));
+  }
+
+  if (cloudData.advancedConstraints && typeof cloudData.advancedConstraints === 'object') {
+    termKeys.forEach(tk => safeSet(`edu_advanced_constraints_${tk}`, cloudData.advancedConstraints));
+  }
+
+  const hasScheduleKey = cloudData.timetableData !== undefined || cloudData.schedules !== undefined;
+  const resolvedSchedule = cloudData.timetableData !== undefined ? cloudData.timetableData : cloudData.schedules;
+  if (hasScheduleKey) {
+    if (resolvedSchedule && typeof resolvedSchedule === 'object' && Array.isArray(resolvedSchedule.lessons)) {
+      safeSet('edu_timetable_active', resolvedSchedule);
+      termKeys.forEach(tk => safeSet(`edu_timetable_${tk}`, resolvedSchedule));
+    } else if (resolvedSchedule === null) {
+      try {
+        localStorage.removeItem('edu_timetable_active');
+        termKeys.forEach(tk => localStorage.removeItem(`edu_timetable_${tk}`));
+      } catch {}
+    }
+  }
+
+  if (cloudData.schoolInfo && typeof cloudData.schoolInfo === 'object') {
+    safeSet('edu_school_info_v1', cloudData.schoolInfo);
+    termKeys.forEach(tk => safeSet(`edu_term_school_info_${tk}`, cloudData.schoolInfo));
+  }
+
+  if (Array.isArray(cloudData.availableYears) && cloudData.availableYears.length > 0) {
+    safeSet('edu_available_years', cloudData.availableYears);
+  }
+
+  if (cloudData.lockedYears && typeof cloudData.lockedYears === 'object') {
+    safeSet('edu_locked_years', cloudData.lockedYears);
+  }
+
+  const updatedTime = cloudData.lastUpdatedText
+    || (cloudData.lastUpdated?.toDate ? cloudData.lastUpdated.toDate().toLocaleString('vi-VN') : undefined)
+    || (cloudData.updatedAt ? new Date(cloudData.updatedAt).toLocaleString('vi-VN') : undefined);
+  if (updatedTime) {
+    safeSet('edu_last_cloud_synced_at', updatedTime);
+  }
+}
+
+/**
+ * Ghi toàn bộ dữ liệu (GV, Lớp, Phân công, Ràng buộc xếp lịch, TKB) lên Firestore
  * Ghi chính xác vào document: "schools/thpt-nguyen-binh-khiem/terms/2026___2027_HK1"
  */
 export async function pushSchoolDataToCloud(payload: {
   teachers: any[];
   classes: any[];
   subjects?: any[];
+  subjectsConfig?: any[];
   departments?: any[];
   assignments?: any;
   schedules?: any;
+  timetableData?: any;
   schoolInfo?: any;
   classSubjectPeriods?: any;
+  subjectDistribution?: any;
+  curriculumRules?: any;
+  classThreeConsecutivePeriods?: any;
   classShifts?: any;
+  sessionMode?: string;
+  afternoonPeriodsCount?: number;
+  lockedSlots?: any;
+  timetableLockedSlots?: any;
+  customFixedSlots?: any[];
+  teacherConstraints?: any;
+  advancedConstraints?: any;
+  availableYears?: string[];
+  lockedYears?: Record<string, boolean>;
   academicYear?: string;
   semester?: string;
+  termKey?: string;
+  fullSync?: boolean;
+  allowClearTimetable?: boolean;
 }): Promise<{ success: boolean; message: string; timestamp: string }> {
   const formattedTime = new Date().toLocaleString('vi-VN');
   try {
+    const localSnapshot = collectLocalSchoolSnapshot(payload.termKey);
+
     // Đảm bảo đóng gói đầy đủ: homeroomAssignments và subjectAssignments
-    let homeroomAssignments = payload.assignments?.homeroomAssignments || {};
+    let homeroomAssignments = payload.assignments?.homeroomAssignments || localSnapshot.assignments?.homeroomAssignments || {};
     let subjectAssignments = payload.assignments?.subjectAssignments || {};
 
-    // Nếu subjectAssignments bị rỗng trong payload, tra cứu ngay từ localStorage
+    // Nếu subjectAssignments bị rỗng trong payload, tra cứu ngay từ localSnapshot
     if (!subjectAssignments || Object.keys(subjectAssignments).length === 0) {
-      try {
-        const a3 = localStorage.getItem('edu_assignments_v3') || localStorage.getItem('edu_assignments');
-        if (a3) {
-          const p = JSON.parse(a3);
-          if (p.subjectAssignments && Object.keys(p.subjectAssignments).length > 0) {
-            subjectAssignments = p.subjectAssignments;
-            if (!homeroomAssignments || Object.keys(homeroomAssignments).length === 0) {
-              homeroomAssignments = p.homeroomAssignments || {};
-            }
-          }
-        }
-      } catch {}
+      if (localSnapshot.assignments?.subjectAssignments && Object.keys(localSnapshot.assignments.subjectAssignments).length > 0) {
+        subjectAssignments = localSnapshot.assignments.subjectAssignments;
+      }
     }
 
     const NEW_SCHOOL_LOGO_ID = 'logo_nbk_an_giang_official_2026';
     const NEW_SCHOOL_LOGO_URL = '/logo_nbk.svg?v=3.0';
     const NEW_SCHOOL_LOGO_TYPE = 'svg_vector_official';
 
+    const mergedSchoolInfo = payload.schoolInfo || localSnapshot.schoolInfo || {};
     const schoolInfoToSave = {
-      schoolName: payload.schoolInfo?.schoolName || DEFAULT_SCHOOL_NAME,
-      departmentName: payload.schoolInfo?.departmentName || DEFAULT_DEPARTMENT_NAME,
+      schoolName: mergedSchoolInfo?.schoolName || DEFAULT_SCHOOL_NAME,
+      departmentName: mergedSchoolInfo?.departmentName || DEFAULT_DEPARTMENT_NAME,
       schoolId: TARGET_SCHOOL_ID,
       logoId: NEW_SCHOOL_LOGO_ID,
       logoUrl: NEW_SCHOOL_LOGO_URL,
       logoType: NEW_SCHOOL_LOGO_TYPE,
       address: 'Hoa Long 3, TT. An Châu, Châu Thành, An Giang',
       updatedAt: new Date().toISOString(),
-      ...(payload.schoolInfo || {})
+      ...mergedSchoolInfo
     };
-    // Luôn ghi đè bằng logo mới với query version chống cache
     schoolInfoToSave.logoId = NEW_SCHOOL_LOGO_ID;
     schoolInfoToSave.logoUrl = NEW_SCHOOL_LOGO_URL;
     schoolInfoToSave.logoType = NEW_SCHOOL_LOGO_TYPE;
 
-    const sanitizedClassSubjectPeriods = sanitizeClassSubjectPeriods(payload.classSubjectPeriods);
+    const resolvedSubjects = payload.subjects || payload.subjectsConfig || localSnapshot.subjects || [];
+    const resolvedDepartments = payload.departments !== undefined ? payload.departments : localSnapshot.departments;
+    const rawPeriods = payload.classSubjectPeriods !== undefined ? payload.classSubjectPeriods : localSnapshot.classSubjectPeriods;
+    const sanitizedClassSubjectPeriods = rawPeriods ? sanitizeClassSubjectPeriods(rawPeriods) : undefined;
+    const resolvedThreeConsec = payload.classThreeConsecutivePeriods !== undefined ? payload.classThreeConsecutivePeriods : localSnapshot.classThreeConsecutivePeriods;
+    const resolvedShifts = payload.classShifts !== undefined ? payload.classShifts : localSnapshot.classShifts;
+    const resolvedSessionMode = payload.sessionMode !== undefined ? payload.sessionMode : localSnapshot.sessionMode;
+    const resolvedAfternoonCount = payload.afternoonPeriodsCount !== undefined ? payload.afternoonPeriodsCount : localSnapshot.afternoonPeriodsCount;
+    const resolvedLockedSlots = payload.lockedSlots ?? payload.timetableLockedSlots ?? localSnapshot.lockedSlots;
+    const resolvedCustomFixedSlots = payload.customFixedSlots !== undefined ? payload.customFixedSlots : localSnapshot.customFixedSlots;
+    const resolvedTeacherConstraints = payload.teacherConstraints !== undefined ? payload.teacherConstraints : localSnapshot.teacherConstraints;
+    const resolvedAdvancedConstraints = payload.advancedConstraints !== undefined ? payload.advancedConstraints : localSnapshot.advancedConstraints;
+    const resolvedAvailableYears = payload.availableYears !== undefined ? payload.availableYears : localSnapshot.availableYears;
+    const resolvedLockedYears = payload.lockedYears !== undefined ? payload.lockedYears : localSnapshot.lockedYears;
 
-    const dataToSave = {
+    // Tránh ghi đè `null` lên TKB đã lưu khi chỉ thực hiện đồng bộ một phần (như lưu phân công)
+    let resolvedSchedule: any = payload.timetableData !== undefined ? payload.timetableData : payload.schedules;
+    if (resolvedSchedule === undefined) {
+      resolvedSchedule = localSnapshot.timetableData;
+    }
+    const shouldIncludeSchedule = resolvedSchedule !== undefined && (resolvedSchedule !== null || payload.allowClearTimetable === true || payload.fullSync === true);
+
+    const dataToSave: Record<string, any> = {
       termKey: TARGET_TERM_KEY,
-      academicYear: payload.academicYear || 'Năm học 2026 – 2027',
-      semester: payload.semester || 'Học kỳ I',
-      teachers: payload.teachers || [],
-      classes: payload.classes || [],
-      subjects: payload.subjects || [],
-      departments: payload.departments || null,
+      activeTermKey: payload.termKey || localSnapshot.termKey,
+      academicYear: payload.academicYear || localSnapshot.academicYear || '2026 – 2027',
+      semester: payload.semester || localSnapshot.semester || 'Học kỳ I',
+      teachers: (payload.teachers && payload.teachers.length > 0) ? payload.teachers : (localSnapshot.teachers || []),
+      classes: (payload.classes && payload.classes.length > 0) ? payload.classes : (localSnapshot.classes || []),
+      subjects: resolvedSubjects,
+      subjectsConfig: resolvedSubjects,
       assignments: {
         homeroomAssignments: { ...homeroomAssignments },
-        subjectAssignments: { ...subjectAssignments } // BẮT BUỘC serialize toàn bộ phân công bộ môn hiện tại, tuyệt đối không để rỗng {} hay null
+        subjectAssignments: { ...subjectAssignments }
       },
-      schedules: payload.schedules || null,
-      timetableData: payload.schedules || null,
-      classSubjectPeriods: sanitizedClassSubjectPeriods || null,
-      classShifts: payload.classShifts || null,
       schoolInfo: schoolInfoToSave,
       lastUpdated: serverTimestamp(),
       lastUpdatedText: formattedTime,
       updatedAt: new Date().toISOString()
     };
 
+    if (resolvedDepartments !== undefined) dataToSave.departments = resolvedDepartments;
+    if (sanitizedClassSubjectPeriods !== undefined) dataToSave.classSubjectPeriods = sanitizedClassSubjectPeriods;
+    if (payload.subjectDistribution !== undefined) dataToSave.subjectDistribution = payload.subjectDistribution;
+    if (payload.curriculumRules !== undefined) dataToSave.curriculumRules = payload.curriculumRules;
+    if (resolvedThreeConsec !== undefined) dataToSave.classThreeConsecutivePeriods = resolvedThreeConsec;
+    if (resolvedShifts !== undefined) dataToSave.classShifts = resolvedShifts;
+    if (resolvedSessionMode !== undefined) dataToSave.sessionMode = resolvedSessionMode;
+    if (resolvedAfternoonCount !== undefined) dataToSave.afternoonPeriodsCount = resolvedAfternoonCount;
+    if (resolvedLockedSlots !== undefined) {
+      dataToSave.lockedSlots = resolvedLockedSlots;
+      dataToSave.timetableLockedSlots = resolvedLockedSlots;
+    }
+    if (resolvedCustomFixedSlots !== undefined) dataToSave.customFixedSlots = resolvedCustomFixedSlots;
+    if (resolvedTeacherConstraints !== undefined) dataToSave.teacherConstraints = resolvedTeacherConstraints;
+    if (resolvedAdvancedConstraints !== undefined) dataToSave.advancedConstraints = resolvedAdvancedConstraints;
+    if (resolvedAvailableYears !== undefined) dataToSave.availableYears = resolvedAvailableYears;
+    if (resolvedLockedYears !== undefined) dataToSave.lockedYears = resolvedLockedYears;
+
+    if (shouldIncludeSchedule) {
+      dataToSave.timetableData = resolvedSchedule ?? null;
+    }
+
     const cleanedData = removeUndefinedFields(dataToSave);
+    // Loại bỏ bản sao dư thừa trước khi ghi lên Firestore (deserializeFirestoreTermData sẽ tự khôi phục alias khi đọc)
+    const canonicalDocData: Record<string, any> = { ...cleanedData };
+    delete canonicalDocData.schedules;
+    delete canonicalDocData.subjectsConfig;
+    delete canonicalDocData.timetableLockedSlots;
 
-    // 1. Ghi đúng document chuẩn: "schools/thpt-nguyen-binh-khiem/terms/2026___2027_HK1"
-    await setDoc(TARGET_TERM_DOC_REF, cleanedData, { merge: true });
+    // Tuần tự hóa các trường lớn/lồng nhau (TKB, khóa tiết, phân công, GV, lớp...) thành JSON string trước khi ghi setDoc
+    const serializedForFirestore = serializeForFirestoreDoc(canonicalDocData);
 
-    // 2. Ghi song song vào fallback document: "eduschedule_data/thpt_nguyen_binh_khiem"
-    await setDoc(SCHOOL_DOC_REF, cleanedData, { merge: true });
+    const finalBytes = getUtf8ByteSize(serializedForFirestore);
+    if (finalBytes > 1_020_000) {
+      return {
+        success: false,
+        message: `Dữ liệu vượt quá giới hạn 1MB của Firestore (${Math.round(finalBytes / 1024)} KB). Vui lòng kiểm tra dữ liệu trùng lặp.`,
+        timestamp: formattedTime
+      };
+    }
+
+    if (payload.fullSync) {
+      // Ghi đè toàn bộ document (không merge) để dọn sạch hoàn toàn các field Object/Array lồng nhau cũ (>40k index entries) trên Cloud
+      await setDoc(TARGET_TERM_DOC_REF, serializedForFirestore);
+      await setDoc(SCHOOL_DOC_REF, serializedForFirestore);
+    } else {
+      const mergePayload = {
+        ...serializedForFirestore,
+        schedules: deleteField(),
+        subjectsConfig: deleteField(),
+        timetableLockedSlots: deleteField()
+      };
+      await setDoc(TARGET_TERM_DOC_REF, mergePayload, { merge: true });
+      await setDoc(SCHOOL_DOC_REF, mergePayload, { merge: true });
+    }
 
     // 3. Cập nhật parent school document "schools/thpt-nguyen-binh-khiem"
-    await setDoc(PARENT_SCHOOL_DOC_REF, removeUndefinedFields({
+    await setDoc(PARENT_SCHOOL_DOC_REF, serializeForFirestoreDoc({
       id: TARGET_SCHOOL_ID,
       name: schoolInfoToSave.schoolName,
       departmentName: schoolInfoToSave.departmentName,
@@ -192,19 +700,24 @@ export async function pushSchoolDataToCloud(payload: {
       logoType: NEW_SCHOOL_LOGO_TYPE,
       currentAcademicYear: dataToSave.academicYear,
       currentSemester: dataToSave.semester,
+      availableYears: resolvedAvailableYears,
+      lockedYears: resolvedLockedYears,
+      schoolInfo: schoolInfoToSave,
       updatedAt: new Date().toISOString()
     }), { merge: true });
 
     const subCount = Object.values(subjectAssignments).reduce(
       (sum: number, cls: any) => sum + Object.keys(cls || {}).length, 0
     );
+    const fixedCount = Array.isArray(resolvedCustomFixedSlots) ? resolvedCustomFixedSlots.length : 0;
 
-    // Cập nhật bộ nhớ đệm in-memory ngay sau khi lưu thành công
-    setCachedTermData(TARGET_TERM_KEY, cleanedData);
+    // Cập nhật bộ nhớ đệm in-memory (lưu dạng Object đã giải nén + alias để UI & lazy reader dùng trực tiếp)
+    const cacheCopy = deserializeFirestoreTermData(serializedForFirestore);
+    setCachedTermData(TARGET_TERM_KEY, cacheCopy);
 
     return {
       success: true,
-      message: `Đã lưu thành công dữ liệu (101 GV, 44 Lớp, ${subCount} phân công môn học, TKB) lên Cloud Firestore lúc ${formattedTime}!`,
+      message: `Đã lưu thành công dữ liệu (${dataToSave.teachers.length} GV, ${dataToSave.classes.length} Lớp, ${subCount} phân công, ${fixedCount} tiết cố định & đầy đủ ràng buộc/TKB) lên Cloud Firestore lúc ${formattedTime}!`,
       timestamp: formattedTime
     };
   } catch (error: any) {
@@ -263,7 +776,9 @@ export async function pullSchoolDataFromCloud(forceRefresh = false): Promise<{
 }> {
   try {
     // 1. Kiểm tra bộ nhớ đệm tạm trong phiên làm việc nếu không yêu cầu ép buộc làm mới
-    if (!forceRefresh) {
+    if (forceRefresh) {
+      invalidateTermCache(TARGET_TERM_KEY);
+    } else {
       const cached = getCachedTermData(TARGET_TERM_KEY);
       if (cached) {
         return {
@@ -286,7 +801,7 @@ export async function pullSchoolDataFromCloud(forceRefresh = false): Promise<{
     }
 
     if (snap.exists()) {
-      const data = snap.data();
+      const data = deserializeFirestoreTermData(snap.data());
       const updatedTime = data.lastUpdatedText || (data.lastUpdated?.toDate ? data.lastUpdated.toDate().toLocaleString('vi-VN') : new Date().toLocaleString('vi-VN'));
       
       // Lưu vào bộ nhớ đệm tạm
@@ -347,12 +862,12 @@ export function subscribeToSchoolDoc(
     TARGET_TERM_DOC_REF,
     (snapshot) => {
       if (snapshot.exists()) {
-        onData(snapshot.data());
+        onData(deserializeFirestoreTermData(snapshot.data()));
       } else {
         // Fallback đọc từ SCHOOL_DOC_REF nếu TARGET_TERM_DOC_REF chưa có
         getDoc(SCHOOL_DOC_REF).then(altSnap => {
           if (altSnap.exists()) {
-            onData(altSnap.data());
+            onData(deserializeFirestoreTermData(altSnap.data()));
           } else {
             onData(null);
           }
@@ -393,7 +908,7 @@ export function subscribeToSchool(
     schoolRef,
     (snapshot) => {
       if (snapshot.exists()) {
-        onData(snapshot.data());
+        onData(deserializeFirestoreTermData(snapshot.data()));
       } else {
         onData(null);
       }
@@ -444,7 +959,7 @@ export function subscribeToTerm(
     termRef,
     (snapshot) => {
       if (snapshot.exists()) {
-        onData(snapshot.data());
+        onData(deserializeFirestoreTermData(snapshot.data()));
       } else {
         onData(null);
       }
@@ -490,12 +1005,12 @@ export async function saveSchoolToFirestore(
 ): Promise<{ success: boolean; message: string }> {
   try {
     const schoolRef = doc(db, 'schools', schoolId);
-    const payload = {
+    const payload = serializeForFirestoreDoc({
       ...schoolData,
       id: schoolId,
       updatedAt: new Date().toISOString(),
       lastUpdatedBy: author || 'Admin'
-    };
+    });
     await setDoc(schoolRef, payload, { merge: true });
     return { success: true, message: 'Đã lưu thông tin trường học lên Cloud Firestore!' };
   } catch (error: any) {
@@ -553,17 +1068,26 @@ export async function saveTermToFirestore(
     teachers?: any[];
     classes?: any[];
     subjectsConfig?: any[];
+    subjects?: any[];
     departments?: any[];
     classSubjectPeriods?: any;
     subjectDistribution?: any;
     curriculumRules?: any;
     classThreeConsecutivePeriods?: any;
+    classShifts?: any;
     assignments?: any;
     timetableData?: any;
+    schedules?: any;
+    lockedSlots?: any;
     timetableLockedSlots?: any;
+    customFixedSlots?: any[];
+    teacherConstraints?: any;
+    advancedConstraints?: any;
     sessionMode?: string;
     afternoonPeriodsCount?: number;
     schoolInfo?: any;
+    availableYears?: string[];
+    lockedYears?: Record<string, boolean>;
   },
   author?: string
 ): Promise<{ success: boolean; message: string; timestamp: string }> {
@@ -596,31 +1120,45 @@ export async function saveTermToFirestore(
     };
 
     const sanitizedClassSubjectPeriods = sanitizeClassSubjectPeriods(termPayload.classSubjectPeriods);
+    const resolvedSchedule = termPayload.timetableData !== undefined ? termPayload.timetableData : termPayload.schedules;
+    const resolvedLocked = termPayload.lockedSlots ?? termPayload.timetableLockedSlots;
+    const resolvedSubjects = termPayload.subjects || termPayload.subjectsConfig;
 
     const termRef = doc(db, 'schools', schoolId, 'terms', termKey);
-    const completePayload = {
+    const completePayload: Record<string, any> = {
       termKey,
       ...termPayload,
+      subjects: resolvedSubjects,
       classSubjectPeriods: sanitizedClassSubjectPeriods,
       assignments: assignmentsToSave,
+      timetableData: resolvedSchedule ?? null,
+      lockedSlots: resolvedLocked,
+      lastUpdatedText: formattedTime,
       updatedAt: timestamp,
       lastUpdatedBy: author || 'Admin'
     };
+    delete completePayload.schedules;
+    delete completePayload.subjectsConfig;
+    delete completePayload.timetableLockedSlots;
 
     const cleanedPayload = removeUndefinedFields(completePayload);
 
-    await setDoc(termRef, cleanedPayload, { merge: true });
+    // Tuần tự hóa toàn bộ các trường lớn/lồng nhau thành JSON string để không vượt quá 40.000 index entries của Firestore
+    const serializedPayload = serializeForFirestoreDoc(cleanedPayload);
+
+    // Ghi đè toàn bộ term document (không merge) để xóa sạch các field Object/Array lồng nhau cũ nếu có
+    await setDoc(termRef, serializedPayload);
 
     // Cập nhật song song cả TARGET_TERM_DOC_REF nếu schoolId hoặc termKey tương ứng
     if (termKey !== TARGET_TERM_KEY || schoolId !== TARGET_SCHOOL_ID) {
       try {
-        await setDoc(TARGET_TERM_DOC_REF, cleanedPayload, { merge: true });
+        await setDoc(TARGET_TERM_DOC_REF, serializedPayload);
       } catch {}
     }
 
     // Also update parent school document's last activity
     const schoolRef = doc(db, 'schools', schoolId);
-    await setDoc(schoolRef, removeUndefinedFields({
+    await setDoc(schoolRef, serializeForFirestoreDoc({
       id: schoolId,
       name: termPayload.schoolInfo?.schoolName || DEFAULT_SCHOOL_NAME,
       departmentName: termPayload.schoolInfo?.departmentName || DEFAULT_DEPARTMENT_NAME,
@@ -629,6 +1167,9 @@ export async function saveTermToFirestore(
       logoType: 'svg_vector_official',
       currentAcademicYear: termPayload.academicYear,
       currentSemester: termPayload.semester,
+      availableYears: termPayload.availableYears,
+      lockedYears: termPayload.lockedYears,
+      schoolInfo: termPayload.schoolInfo,
       updatedAt: timestamp,
       lastUpdatedBy: author || 'Admin'
     }), { merge: true });
