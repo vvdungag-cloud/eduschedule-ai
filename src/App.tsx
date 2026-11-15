@@ -7,7 +7,7 @@ import {
   Pencil, ArrowUpDown, ArrowUp, ArrowDown, Search, BarChart3,
   FileSpreadsheet, FileText, FileDown, Upload, Calendar, CalendarDays, FolderArchive, Clock,
   Lock, Unlock, Save, Layers, KeyRound, ShieldCheck, Cloud, Shield, ClipboardList,
-  Sun, Moon, Calculator
+  Sun, Moon, Calculator, Zap, Table
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { 
@@ -3018,6 +3018,8 @@ export default function App() {
     }
   }, [currentTermKey, isSendScheduleModalOpen]);
 
+  const [lockedSlotsVersion, setLockedSlotsVersion] = useState(0);
+
   useEffect(() => {
     const handleTimetableUpdate = (e: any) => {
       if (e.detail !== undefined) {
@@ -3031,13 +3033,95 @@ export default function App() {
         }
       }
     };
+    const handleLockedSlotsUpdate = () => setLockedSlotsVersion(v => v + 1);
+
     window.addEventListener('edu_timetable_updated', handleTimetableUpdate);
+    window.addEventListener('edu_locked_slots_updated', handleLockedSlotsUpdate);
+    window.addEventListener('cloud-data-pulled', handleLockedSlotsUpdate);
     window.addEventListener('storage', handleTimetableUpdate);
+    window.addEventListener('storage', handleLockedSlotsUpdate);
     return () => {
       window.removeEventListener('edu_timetable_updated', handleTimetableUpdate);
+      window.removeEventListener('edu_locked_slots_updated', handleLockedSlotsUpdate);
+      window.removeEventListener('cloud-data-pulled', handleLockedSlotsUpdate);
       window.removeEventListener('storage', handleTimetableUpdate);
+      window.removeEventListener('storage', handleLockedSlotsUpdate);
     };
   }, [currentTermKey]);
+
+  const timetableSummaryStats = useMemo(() => {
+    const lessons: any[] = Array.isArray(activeTimetableData?.lessons) ? activeTimetableData.lessons : [];
+    const totalLessons = lessons.length || (typeof activeTimetableData?.stats?.totalLessons === 'number' ? activeTimetableData.stats.totalLessons : 0);
+
+    // Tính số tiết trùng thực tế theo giáo viên & lớp trong cùng (Thứ, Tiết)
+    let conflicts = 0;
+    if (lessons.length > 0) {
+      const teacherSlotCounts = new Map<string, number>();
+      const classSlotCounts = new Map<string, number>();
+      lessons.forEach(l => {
+        const d = l.day;
+        const p = l.period;
+        if (d === undefined || p === undefined) return;
+        if (l.classId) {
+          const cKey = `${l.classId}_${d}_${p}`;
+          classSlotCounts.set(cKey, (classSlotCounts.get(cKey) || 0) + 1);
+        }
+        if (l.teacherId) {
+          const tKey = `${l.teacherId}_${d}_${p}`;
+          teacherSlotCounts.set(tKey, (teacherSlotCounts.get(tKey) || 0) + 1);
+        }
+      });
+      classSlotCounts.forEach(cnt => {
+        if (cnt > 1) conflicts += cnt - 1;
+      });
+      teacherSlotCounts.forEach(cnt => {
+        if (cnt > 1) conflicts += cnt - 1;
+      });
+    }
+
+    // Tính tổng số ô đã khóa từ cấu hình lockedSlots của học kỳ hiện tại
+    let lockedCount = 0;
+    try {
+      const rawLocked = localStorage.getItem(`edu_locked_slots_${currentTermKey}`);
+      if (rawLocked) {
+        const parsed = JSON.parse(rawLocked);
+        if (parsed && typeof parsed === 'object') {
+          const globalArr = Array.isArray(parsed.global) ? parsed.global : [];
+          lockedCount += globalArr.length * classes.length;
+
+          const gradeClassCounts: Record<string, number> = { '10': 0, '11': 0, '12': 0 };
+          classes.forEach(c => {
+            if (gradeClassCounts[c.grade] !== undefined) {
+              gradeClassCounts[c.grade]++;
+            }
+          });
+          if (parsed.byGrade && typeof parsed.byGrade === 'object') {
+            Object.entries(parsed.byGrade).forEach(([gr, arr]) => {
+              if (Array.isArray(arr)) {
+                lockedCount += arr.length * (gradeClassCounts[gr] || 0);
+              }
+            });
+          }
+          if (parsed.byClass && typeof parsed.byClass === 'object') {
+            Object.values(parsed.byClass).forEach(arr => {
+              if (Array.isArray(arr)) lockedCount += arr.length;
+            });
+          }
+          if (parsed.byTeacher && typeof parsed.byTeacher === 'object') {
+            Object.values(parsed.byTeacher).forEach(arr => {
+              if (Array.isArray(arr)) lockedCount += arr.length;
+            });
+          }
+        }
+      }
+    } catch {}
+
+    return {
+      totalLessons,
+      conflicts,
+      lockedCount
+    };
+  }, [activeTimetableData, currentTermKey, classes, activeTab, lockedSlotsVersion]);
 
   // Update contact information for teachers
   const handleUpdateTeacherContact = useCallback((teacherId: string, email?: string, phone?: string) => {
@@ -7451,26 +7535,6 @@ export default function App() {
               <BarChart3 className={`w-[14px] h-[14px] shrink-0 transition-colors ${activeTab === "stats" ? "text-white" : "text-slate-500 group-hover:text-indigo-600"}`} />
               <span className="whitespace-nowrap">Thống kê và phân tích</span>
             </button>
-
-            {/* Divider */}
-            <span className="w-px h-4 bg-slate-200 mx-0.5 shrink-0 hidden sm:inline-block" />
-
-            {/* 9. Hướng dẫn sử dụng */}
-            <button
-              type="button"
-              onClick={() => setIsUserGuideModalOpen(true)}
-              className="group px-2.5 py-1.5 rounded-lg transition-all duration-200 ease-in-out flex items-center cursor-pointer select-none shrink-0 font-medium text-slate-600 hover:text-emerald-700 hover:bg-emerald-50"
-              style={{
-                whiteSpace: "nowrap",
-                gap: "4px",
-                fontSize: "0.82rem",
-                lineHeight: 1.3
-              }}
-              title="Hướng dẫn sử dụng & Phím tắt ứng dụng (Phím tắt: F1 hoặc ?)"
-            >
-              <HelpCircle className="w-[14px] h-[14px] shrink-0 text-emerald-600 group-hover:scale-110 transition-transform" />
-              <span className="whitespace-nowrap">Hướng dẫn</span>
-            </button>
           </div>
         </div>
       </div>
@@ -10700,9 +10764,9 @@ export default function App() {
 
           {/* 1. MÀN HÌNH KHỞI ĐỘNG MẶC ĐỊNH (DEFAULT WELCOME / DASHBOARD VIEW) */}
           {(activeTab === 'welcome' || activeTab === null) && (
-            <div className="flex-1 flex flex-col items-center justify-center py-12 md:py-20 px-6 text-center max-w-3xl mx-auto w-full animate-in fade-in duration-300">
+            <div className="flex-1 flex flex-col items-center justify-center py-8 md:py-12 px-4 sm:px-6 text-center max-w-5xl mx-auto w-full animate-in fade-in duration-300">
               {/* Logo & Tên Trường */}
-              <div className="flex flex-col items-center mb-7">
+              <div className="flex flex-col items-center mb-6">
                 <div className="w-24 h-24 md:w-28 md:h-28 rounded-3xl bg-white border border-slate-200/90 shadow-md p-3 flex items-center justify-center mb-5 transform hover:scale-105 transition-all duration-300">
                   <SchoolLogo
                     customLogo={customLogo}
@@ -10733,15 +10797,44 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Khung thông báo trung lập */}
-              <div className="bg-white/90 border border-slate-200/90 rounded-2xl p-4 md:p-5 max-w-xl mx-auto shadow-xs backdrop-blur-xs mb-6">
-                <p className="text-sm md:text-base text-slate-700 font-medium leading-relaxed">
-                  Phần mềm Phân công giảng dạy và Xếp thời khóa biểu thông minh. Vui lòng chọn một tính năng trên thanh điều hướng để bắt đầu làm việc.
+              {/* Khung giới thiệu trung tâm + 3 nút Truy cập nhanh (Quick Actions) */}
+              <div className="bg-white/90 border border-slate-200/90 rounded-2xl p-5 md:p-6 max-w-3xl w-full mx-auto shadow-xs backdrop-blur-xs mb-6">
+                <p className="text-sm md:text-base text-slate-700 font-semibold leading-relaxed">
+                  Phần mềm Phân công giảng dạy và Xếp thời khóa biểu thông minh.
                 </p>
+
+                <div className="mt-4 flex flex-wrap justify-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('board')}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs sm:text-sm tracking-wide shadow-sm hover:shadow-md transition-all cursor-pointer whitespace-nowrap"
+                  >
+                    <Table className="w-4 h-4 shrink-0" />
+                    <span>BẢNG PHÂN CÔNG</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('timetable')}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold text-xs sm:text-sm tracking-wide shadow-sm hover:shadow-md transition-all cursor-pointer whitespace-nowrap"
+                  >
+                    <Zap className="w-4 h-4 shrink-0" />
+                    <span>XẾP TKB TỰ ĐỘNG</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsSendScheduleModalOpen(true)}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-bold text-xs sm:text-sm tracking-wide shadow-sm hover:shadow-md transition-all cursor-pointer whitespace-nowrap"
+                  >
+                    <Send className="w-4 h-4 shrink-0" />
+                    <span>GỬI PHÂN CÔNG &amp; TKB</span>
+                  </button>
+                </div>
               </div>
 
-              {/* BẢNG TÓM TẮT NHANH TÌNH HÌNH HỆ THỐNG */}
-              <div className="w-full max-w-2xl bg-white/70 backdrop-blur-xs border border-slate-200/80 rounded-2xl p-4 md:p-5 shadow-xs">
+              {/* BẢNG TÓM TẮT NHANH TÌNH HÌNH HỆ THỐNG (4 CỘT) */}
+              <div className="w-full max-w-5xl bg-white/70 backdrop-blur-xs border border-slate-200/80 rounded-2xl p-4 md:p-5 shadow-xs">
                 <div className="flex items-center justify-between mb-3 px-1">
                   <div className="flex items-center gap-2">
                     <span className="w-2 h-2 rounded-full bg-indigo-600 animate-pulse"></span>
@@ -10754,7 +10847,7 @@ export default function App() {
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-left">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 text-left">
                   {/* THẺ 1: TỔNG SỐ GIÁO VIÊN */}
                   <div 
                     onClick={() => setActiveTab('teachers')}
@@ -10813,31 +10906,50 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* THẺ 3: TRẠNG THÁI ĐỒNG BỘ CLOUD */}
+                  {/* THẺ 3: TRẠNG THÁI TKB */}
                   <div 
-                    onClick={() => openLoginModal()}
-                    className="group bg-white rounded-xl p-3.5 border border-slate-200/90 shadow-2xs hover:border-blue-300 hover:shadow-md transition-all cursor-pointer relative overflow-hidden"
-                    title="Bấm để quản lý kết nối Cloud & Quyền Admin"
+                    onClick={() => setActiveTab('timetable')}
+                    className="group bg-white rounded-xl p-3.5 border border-slate-200/90 shadow-2xs hover:border-amber-300 hover:shadow-md transition-all cursor-pointer relative overflow-hidden"
+                    title="Bấm để mở phân hệ Thời khóa biểu"
                   >
                     <div className="flex items-center justify-between mb-2">
-                      <span className="text-xs font-semibold text-slate-500 group-hover:text-blue-600 transition-colors">
-                        Đồng bộ Cloud
+                      <span className="text-xs font-semibold text-slate-500 group-hover:text-amber-600 transition-colors">
+                        Trạng thái TKB
                       </span>
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleForcePullFromCloud();
-                          }}
-                          disabled={isPullingCloud}
-                          title="Cập nhật dữ liệu từ Cloud (Tải lại 101 GV, 44 Lớp, TKB mới nhất)"
-                          className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-50 hover:bg-blue-100 text-blue-700 text-[10px] font-bold border border-blue-200 transition-all cursor-pointer shadow-2xs hover:scale-105 active:scale-95 disabled:opacity-50"
-                        >
-                          <RefreshCw className={`w-3 h-3 ${isPullingCloud ? 'animate-spin' : ''}`} />
-                          <span>{isPullingCloud ? 'Đang tải...' : 'Cập nhật từ Cloud'}</span>
-                        </button>
-                        <div className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all ${
+                      <div className="w-7 h-7 rounded-lg bg-amber-50 text-amber-500 flex items-center justify-center group-hover:bg-amber-500 group-hover:text-white transition-all">
+                        <Calendar className="w-3.5 h-3.5" />
+                      </div>
+                    </div>
+                    <div className="flex items-baseline gap-1.5">
+                      <span className="text-2xl font-black text-slate-900 group-hover:text-amber-700 transition-colors font-mono">
+                        {timetableSummaryStats.totalLessons.toLocaleString('vi-VN')}
+                      </span>
+                      <span className="text-xs font-bold text-slate-500">tiết học</span>
+                    </div>
+                    <div className="mt-1.5 space-y-0.5 text-[11px] font-medium">
+                      <div className={`flex items-center gap-1 ${timetableSummaryStats.conflicts === 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        <CheckCircle className="w-3 h-3 shrink-0" />
+                        <span>{timetableSummaryStats.conflicts} trùng tiết</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-amber-600">
+                        <Lock className="w-3 h-3 shrink-0" />
+                        <span>Đã khóa {timetableSummaryStats.lockedCount.toLocaleString('vi-VN')} ô</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* THẺ 4: TRẠNG THÁI ĐỒNG BỘ CLOUD */}
+                  <div 
+                    onClick={() => openLoginModal()}
+                    className="group bg-white rounded-xl p-3.5 border border-slate-200/90 shadow-2xs hover:border-blue-300 hover:shadow-md transition-all cursor-pointer relative overflow-hidden flex flex-col justify-between"
+                    title="Bấm để quản lý kết nối Cloud & Quyền Admin"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-semibold text-slate-500 group-hover:text-blue-600 transition-colors">
+                          Đồng bộ Cloud
+                        </span>
+                        <div className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all shrink-0 ${
                           cloudConnectionStatus === 'connected'
                             ? 'bg-emerald-50 text-emerald-600 group-hover:bg-emerald-600 group-hover:text-white'
                             : cloudConnectionStatus === 'syncing'
@@ -10847,32 +10959,47 @@ export default function App() {
                           <Cloud className="w-3.5 h-3.5" />
                         </div>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className={`relative flex h-2.5 w-2.5 ${cloudConnectionStatus === 'syncing' ? 'animate-pulse' : ''}`}>
-                        {cloudConnectionStatus === 'connected' && (
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                        )}
-                        <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
-                          cloudConnectionStatus === 'connected' 
-                            ? 'bg-emerald-500' 
+                      <div className="flex items-center gap-2">
+                        <span className={`relative flex h-2.5 w-2.5 shrink-0 ${cloudConnectionStatus === 'syncing' ? 'animate-pulse' : ''}`}>
+                          {cloudConnectionStatus === 'connected' && (
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                          )}
+                          <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
+                            cloudConnectionStatus === 'connected' 
+                              ? 'bg-emerald-500' 
+                              : cloudConnectionStatus === 'syncing' 
+                              ? 'bg-amber-500' 
+                              : 'bg-rose-500'
+                          }`}></span>
+                        </span>
+                        <span className="text-base font-bold text-slate-900 group-hover:text-blue-700 transition-colors">
+                          {cloudConnectionStatus === 'connected' 
+                            ? 'Đã kết nối' 
                             : cloudConnectionStatus === 'syncing' 
-                            ? 'bg-amber-500' 
-                            : 'bg-rose-500'
-                        }`}></span>
-                      </span>
-                      <span className="text-base font-bold text-slate-900 group-hover:text-blue-700 transition-colors">
-                        {cloudConnectionStatus === 'connected' 
-                          ? 'Đã kết nối' 
-                          : cloudConnectionStatus === 'syncing' 
-                          ? 'Đang đồng bộ' 
-                          : 'Ngoại tuyến'}
-                      </span>
+                            ? 'Đang đồng bộ' 
+                            : 'Ngoại tuyến'}
+                        </span>
+                      </div>
+                      <div className="mt-1 flex items-center gap-1 text-[11px] text-slate-500 truncate" title={lastSyncedAt ? `Lần cuối: ${lastSyncedAt}` : 'Firestore đồng bộ tự động'}>
+                        <span className="truncate">
+                          {lastSyncedAt ? `Lần cuối: ${lastSyncedAt}` : 'Tự động đồng bộ Firestore'}
+                        </span>
+                      </div>
                     </div>
-                    <div className="mt-1.5 flex items-center gap-1 text-[11px] text-slate-500 truncate" title={lastSyncedAt ? `Lần cuối: ${lastSyncedAt}` : 'Firestore đồng bộ tự động'}>
-                      <span className="truncate">
-                        {lastSyncedAt ? `Lần cuối: ${lastSyncedAt}` : 'Tự động đồng bộ Firestore'}
-                      </span>
+                    <div className="mt-2.5">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleForcePullFromCloud();
+                        }}
+                        disabled={isPullingCloud}
+                        title="Cập nhật dữ liệu từ Cloud (Tải lại dữ liệu mới nhất)"
+                        className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs px-2.5 py-1 rounded-md bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold border border-blue-200 transition-all cursor-pointer shadow-2xs active:scale-95 disabled:opacity-50"
+                      >
+                        <RefreshCw className={`w-3 h-3 shrink-0 ${isPullingCloud ? 'animate-spin' : ''}`} />
+                        <span>{isPullingCloud ? 'Đang tải...' : 'Cập nhật từ Cloud'}</span>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -10881,7 +11008,7 @@ export default function App() {
                 <div className="mt-4 pt-3.5 border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-2 text-xs text-slate-600 font-medium">
                     <Shield className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>Dự phòng an toàn: 101 GV, 44 Lớp, Phân công, TKB</span>
+                    <span>Dự phòng an toàn: {teachers.length} GV, {classes.length} Lớp, Phân công, TKB</span>
                   </div>
                   <button
                     type="button"
@@ -15199,6 +15326,11 @@ export default function App() {
         onUpdateClassContact={handleUpdateClassContact}
         isAdmin={isAdmin}
       />
+
+      {/* CHÂN TRANG (FOOTER) */}
+      <footer className="py-3 text-center text-xs text-slate-400 border-t border-slate-200/60 bg-white/50 print:hidden">
+        Hệ thống Quản lý Chuyên môn &amp; Thời khóa biểu Thông minh • Phát triển cho Trường THPT Nguyễn Bỉnh Khiêm – An Giang
+      </footer>
 
     </div>
   );

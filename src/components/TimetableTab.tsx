@@ -395,6 +395,7 @@ export const TimetableTab: React.FC<TimetableTabProps> = ({
 
   useEffect(() => {
     localStorage.setItem(lockedStorageKey, JSON.stringify(lockedSlots));
+    window.dispatchEvent(new CustomEvent('edu_locked_slots_updated', { detail: lockedSlots }));
   }, [lockedSlots, lockedStorageKey]);
 
   // a) Custom fixed slots state
