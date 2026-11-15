@@ -105,22 +105,26 @@ export const AdminAuthModal: React.FC<AdminAuthModalProps> = ({ onOpenUserManage
     setErrorMessage(null);
     setSuccessMessage(null);
 
+    if (!usernameInput.trim()) {
+      setErrorMessage('Vui lòng nhập Tên đăng nhập / Email!');
+      return;
+    }
     if (!passwordInput.trim()) {
-      setErrorMessage('Vui lòng nhập mật khẩu Quản trị viên!');
+      setErrorMessage('Vui lòng nhập Mật khẩu!');
       return;
     }
 
-    const res = login(passwordInput, usernameInput || undefined);
+    const res = login(passwordInput, usernameInput);
     if (res.success) {
       setPasswordInput('');
       setUsernameInput('');
-      setSuccessMessage('Đăng nhập Quản trị viên thành công!');
+      setSuccessMessage(res.message || 'Đăng nhập thành công!');
       setTimeout(() => {
         closeLoginModal();
         setSuccessMessage(null);
-      }, 700);
+      }, 600);
     } else {
-      setErrorMessage(res.message || 'Mật khẩu quản trị không chính xác.');
+      setErrorMessage(res.message || 'Tên đăng nhập / Email hoặc mật khẩu không chính xác.');
     }
   };
 
@@ -282,11 +286,9 @@ export const AdminAuthModal: React.FC<AdminAuthModalProps> = ({ onOpenUserManage
                 <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap shadow-sm ${
                   role === 'HEAD_OF_DEPARTMENT'
                     ? 'bg-purple-300 text-slate-950'
-                    : role === 'TEACHER'
-                    ? 'bg-emerald-300 text-slate-950'
-                    : 'bg-amber-300 text-slate-950'
+                    : 'bg-emerald-300 text-slate-950'
                 }`}>
-                  {role === 'HEAD_OF_DEPARTMENT' ? '🎖️ Tổ trưởng' : role === 'TEACHER' ? '👨‍🏫 Giáo viên' : '👁️ Khách (Chỉ xem)'}
+                  {role === 'HEAD_OF_DEPARTMENT' ? '🎖️ Tổ trưởng' : '👨‍🏫 Giáo viên'}
                 </span>
               )}
             </div>
@@ -381,11 +383,11 @@ export const AdminAuthModal: React.FC<AdminAuthModalProps> = ({ onOpenUserManage
           </div>
         )}
 
-        {/* TAB 1: LOGIN FORM & ROLE SELECTION MATRIX */}
+        {/* TAB 1: ACCOUNT SESSION & SWITCH ACCOUNT */}
         {activeTab === 'login' && (
           <div className="p-5 space-y-4 overflow-y-auto max-h-[75vh]">
             {/* Current user badge / status */}
-            {currentUser ? (
+            {currentUser && (
               <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 flex items-center justify-between text-xs">
                 <div>
                   <span className="text-[10px] text-blue-600 font-bold uppercase">Đang đăng nhập:</span>
@@ -400,159 +402,27 @@ export const AdminAuthModal: React.FC<AdminAuthModalProps> = ({ onOpenUserManage
                 <button
                   type="button"
                   onClick={() => {
-                    logout();
-                    setSuccessMessage('Đã đăng xuất về Chế độ Khách (Chỉ xem).');
-                    setTimeout(() => setSuccessMessage(null), 1500);
+                    closeLoginModal();
+                    logout('Bạn đã đăng xuất khỏi hệ thống.', 'info');
                   }}
                   className="px-3 py-1.5 bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 rounded-lg font-bold text-xs transition cursor-pointer shadow-2xs"
                 >
-                  Đăng xuất (Về Khách)
+                  Đăng xuất
                 </button>
-              </div>
-            ) : (
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900 flex items-start gap-2.5">
-                <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-bold">Chế độ hiện tại: Khách / Chưa đăng nhập (GUEST - Chỉ xem)</p>
-                  <p className="mt-0.5 text-amber-800 leading-relaxed text-[11px]">
-                    Toàn bộ phân hệ ở chế độ Chỉ xem. Hãy đăng nhập tài khoản theo đúng vai trò công tác bên dưới để mở khóa các tính năng tương ứng.
-                  </p>
-                </div>
               </div>
             )}
 
-            {/* Role Selection Matrix (Ma trận 4 vai trò) */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold text-slate-800">Ma trận Phân quyền & Chọn nhanh vai trò:</span>
-                <span className="text-[11px] text-slate-400">Bấm để điền mẫu tài khoản</span>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                {/* 1. ADMIN */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setUsernameInput('admin');
-                    setPasswordInput('admin123');
-                  }}
-                  className={`p-2.5 rounded-xl border text-left transition cursor-pointer ${
-                    usernameInput === 'admin' 
-                      ? 'border-rose-400 bg-rose-50/70 ring-2 ring-rose-200' 
-                      : 'border-slate-200 bg-white hover:bg-slate-50'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-slate-900 flex items-center gap-1">
-                      <span>👑</span> Quản trị viên
-                    </span>
-                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-rose-100 text-rose-800 font-bold">
-                      ADMIN
-                    </span>
-                  </div>
-                  <p className="text-[10.5px] text-slate-500 mt-1 line-clamp-2">
-                    Toàn quyền: Thêm, Sửa, Xóa, Lưu, Chạy AI xếp TKB, Công bố & Gửi TKB.
-                  </p>
-                  <span className="text-[10px] text-rose-700 font-mono font-semibold block mt-1">
-                    admin / admin123
-                  </span>
-                </button>
-
-                {/* 2. HEAD_OF_DEPARTMENT */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setUsernameInput('totruong');
-                    setPasswordInput('totruong123');
-                  }}
-                  className={`p-2.5 rounded-xl border text-left transition cursor-pointer ${
-                    usernameInput === 'totruong' 
-                      ? 'border-purple-400 bg-purple-50/70 ring-2 ring-purple-200' 
-                      : 'border-slate-200 bg-white hover:bg-slate-50'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-slate-900 flex items-center gap-1">
-                      <span>🎖️</span> Tổ trưởng Chuyên môn
-                    </span>
-                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-purple-100 text-purple-800 font-bold">
-                      TỔ TRƯỞNG
-                    </span>
-                  </div>
-                  <p className="text-[10.5px] text-slate-500 mt-1 line-clamp-2">
-                    Xem và duyệt nguyện vọng của tổ, xem phân công toàn trường.
-                  </p>
-                  <span className="text-[10px] text-purple-700 font-mono font-semibold block mt-1">
-                    totruong / totruong123
-                  </span>
-                </button>
-
-                {/* 3. TEACHER */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setUsernameInput('giaovien');
-                    setPasswordInput('gv123');
-                  }}
-                  className={`p-2.5 rounded-xl border text-left transition cursor-pointer ${
-                    usernameInput === 'giaovien' 
-                      ? 'border-emerald-400 bg-emerald-50/70 ring-2 ring-emerald-200' 
-                      : 'border-slate-200 bg-white hover:bg-slate-50'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-slate-900 flex items-center gap-1">
-                      <span>👨‍🏫</span> Giáo viên Bộ môn
-                    </span>
-                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 font-bold">
-                      TEACHER
-                    </span>
-                  </div>
-                  <p className="text-[10.5px] text-slate-500 mt-1 line-clamp-2">
-                    Xem TKB/phân công, tải file cá nhân, đăng ký tiết bận/tiết tránh.
-                  </p>
-                  <span className="text-[10px] text-emerald-700 font-mono font-semibold block mt-1">
-                    giaovien / gv123
-                  </span>
-                </button>
-
-                {/* 4. GUEST */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    logout();
-                    closeLoginModal();
-                  }}
-                  className="p-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-left transition cursor-pointer"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-slate-900 flex items-center gap-1">
-                      <span>👁️</span> Chế độ Khách
-                    </span>
-                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-100 text-slate-700 font-bold">
-                      GUEST
-                    </span>
-                  </div>
-                  <p className="text-[10.5px] text-slate-500 mt-1 line-clamp-2">
-                    Chỉ có quyền XEM (Read-only), không chỉnh sửa hoặc kích hoạt chức năng.
-                  </p>
-                  <span className="text-[10px] text-slate-600 font-mono font-semibold block mt-1">
-                    Không cần đăng nhập
-                  </span>
-                </button>
-              </div>
-            </div>
-
-            {/* Custom Login Form */}
-            <form onSubmit={handleLoginSubmit} className="space-y-3.5 text-xs bg-slate-50/70 p-3.5 rounded-xl border border-slate-200">
-              <div className="font-bold text-slate-800">Đăng nhập tài khoản hệ thống:</div>
+            {/* Clean Login Form (No default accounts or quick-login hints) */}
+            <form onSubmit={handleLoginSubmit} className="space-y-3.5 text-xs bg-slate-50/70 p-4 rounded-xl border border-slate-200">
+              <div className="font-bold text-slate-800">Đăng nhập / Chuyển tài khoản:</div>
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Tên đăng nhập (Username)</label>
+                <label className="block font-semibold text-slate-700 mb-1">Tên đăng nhập / Email *</label>
                 <input
                   type="text"
+                  required
                   value={usernameInput}
                   onChange={e => setUsernameInput(e.target.value)}
-                  placeholder="admin, totruong, giaovien..."
+                  placeholder="Nhập tên đăng nhập hoặc email..."
                   className="w-full p-2.5 border border-slate-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-xs font-medium"
                 />
               </div>
@@ -571,7 +441,8 @@ export const AdminAuthModal: React.FC<AdminAuthModalProps> = ({ onOpenUserManage
                   <button
                     type="button"
                     onClick={() => setShowPassword(p => !p)}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
                   >
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
@@ -886,7 +757,7 @@ export const AdminAuthModal: React.FC<AdminAuthModalProps> = ({ onOpenUserManage
                       required
                       value={userFormData.username}
                       onChange={e => setUserFormData({ ...userFormData, username: e.target.value })}
-                      placeholder="totruong_toan"
+                      placeholder="Nhập tên đăng nhập..."
                       className="w-full p-2 border border-slate-300 rounded bg-white text-xs"
                     />
                   </div>
@@ -1028,7 +899,7 @@ export const AdminAuthModal: React.FC<AdminAuthModalProps> = ({ onOpenUserManage
                   required
                   value={oldPassword}
                   onChange={e => setOldPassword(e.target.value)}
-                  placeholder="Mật khẩu cũ (mặc định admin123)..."
+                  placeholder="Nhập mật khẩu hiện tại..."
                   className="w-full p-2.5 border border-slate-300 rounded-lg text-xs"
                 />
               </div>

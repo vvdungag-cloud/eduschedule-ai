@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { doc, getDoc } from 'firebase/firestore';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import { doc, getDoc, setDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { db, validateFirestoreConnection } from './firebase';
 import { 
   subscribeToAccounts, 
@@ -45,6 +45,7 @@ export const normalizeRole = (r?: string | null): AppRole => {
 export interface UserAccount {
   id: string;
   username: string;
+  email?: string;
   fullName?: string;
   displayName: string;
   role: AppRole | 'admin' | 'subadmin' | 'viewer';
@@ -55,6 +56,11 @@ export interface UserAccount {
   teacherId?: string; // Optional link to specific teacher in teachers list
   isActive?: boolean; // Default true. False means temporarily locked
   permissions?: string[]; // Granular permission codes
+}
+
+export interface AuthNotice {
+  type: 'warning' | 'info' | 'error';
+  message: string;
 }
 
 export interface RolePermissions {
@@ -73,18 +79,21 @@ export interface AuthContextType extends RolePermissions {
   user: UserAccount | null;      // Đại diện tài khoản hiện tại (alias currentUser)
   currentUser: UserAccount | null;
   role: AppRole;                 // Vai trò hiện tại: 'GUEST' | 'TEACHER' | 'HEAD_OF_DEPARTMENT' | 'ADMIN'
+  isAuthenticated: boolean;      // Bắt buộc đăng nhập (false nếu chưa đăng nhập hoặc GUEST)
   isAdmin: boolean;              // true nếu role === 'ADMIN'
   isHeadOfDepartment: boolean;   // true nếu role === 'HEAD_OF_DEPARTMENT' hoặc 'ADMIN'
   isTeacher: boolean;            // true nếu role === 'TEACHER' hoặc 'HEAD_OF_DEPARTMENT' hoặc 'ADMIN'
   isGuest: boolean;              // true nếu role === 'GUEST'
   hasPermission: (permissionCode: string) => boolean; // Kiểm tra quyền chi tiết
+  authNotice: AuthNotice | null;
+  clearAuthNotice: () => void;
 
   usersList: UserAccount[];
   loginModalOpen: boolean;
   openLoginModal: () => void;
   closeLoginModal: () => void;
   login: (password: string, username?: string) => { success: boolean; message?: string; role?: AppRole };
-  logout: () => void;
+  logout: (reason?: string, noticeType?: 'warning' | 'info' | 'error') => void;
   changeAdminPassword: (oldPass: string, newPass: string) => Promise<{ success: boolean; message: string }>;
   addUserAccount: (user: Omit<UserAccount, 'id' | 'createdAt'>) => Promise<{ success: boolean; message: string }>;
   updateUserAccount: (id: string, updates: Partial<UserAccount>) => Promise<{ success: boolean; message: string }>;
@@ -119,11 +128,22 @@ export interface CloudSyncConfig {
 const DEFAULT_ADMIN_PASSWORD = 'admin123';
 const SESSION_AUTH_KEY = 'edu_session_auth_role';
 const SESSION_USER_KEY = 'edu_session_auth_user';
+const SESSION_ADMIN_TOKEN_KEY = 'edu_admin_session_token';
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 phút không thao tác -> tự động đăng xuất
 const STORAGE_ADMIN_PASS_KEY = 'edu_admin_custom_password';
 const STORAGE_SUB_USERS_KEY = 'edu_sub_users_accounts';
 const STORAGE_CLOUD_CONFIG_KEY = 'edu_cloud_sync_config';
 const STORAGE_CURRENT_SCHOOL_ID = 'edu_current_school_id';
 const STORAGE_CURRENT_SCHOOL_NAME = 'edu_current_school_name';
+
+function generateSessionToken(): string {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+  } catch {}
+  return `sess_${Date.now()}_${Math.random().toString(36).slice(2, 12)}_${Math.random().toString(36).slice(2, 12)}`;
+}
 
 const INITIAL_USERS: UserAccount[] = [
   {
@@ -232,6 +252,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [cloudConnectionStatus, setCloudConnectionStatus] = useState<CloudConnectionStatus>('syncing');
 
   const [loginModalOpen, setLoginModalOpen] = useState(false);
+  const [authNotice, setAuthNotice] = useState<AuthNotice | null>(null);
+  const [adminSessionToken, setAdminSessionToken] = useState<string | null>(() => {
+    try {
+      return sessionStorage.getItem(SESSION_ADMIN_TOKEN_KEY) || null;
+    } catch {
+      return null;
+    }
+  });
+  const pendingAdminTokenRef = useRef<string | null>(null);
+  const lastActivityRef = useRef<number>(Date.now());
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(() => {
     try {
@@ -347,22 +377,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch {}
   }, [cloudConfig]);
 
-  // Derived role and permission states
+  // Derived role and permission states (Vô hiệu hóa hoàn toàn chế độ Khách mặc định)
   const role: AppRole = currentUser ? normalizeRole(currentUser.role) : 'GUEST';
+  const isAuthenticated = Boolean(currentUser && role !== 'GUEST');
   const isCurrentAdmin = role === 'ADMIN';
   const isHeadOfDepartment = role === 'HEAD_OF_DEPARTMENT' || isCurrentAdmin;
   const isTeacher = role === 'TEACHER' || isHeadOfDepartment;
-  const isGuest = role === 'GUEST';
+  const isGuest = !isAuthenticated;
+
+  const clearAuthNotice = useCallback(() => {
+    setAuthNotice(null);
+  }, []);
 
   // Granular Permission Checker
   const hasPermission = useCallback((permissionCode: string): boolean => {
-    // 1. Unauthenticated or GUEST mode: strictly read-only views
+    // 1. Unauthenticated or GUEST mode: strictly denied (Auth Gate enforced)
     if (!currentUser || role === 'GUEST') {
-      return [
-        PERMISSION_CODES.DECLARATION_VIEW,
-        PERMISSION_CODES.ASSIGNMENT_VIEW,
-        PERMISSION_CODES.TIMETABLE_VIEW
-      ].includes(permissionCode as any);
+      return false;
     }
 
     // 2. Temporarily locked account: zero permissions
@@ -397,10 +428,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const canApproveWishes = hasPermission(PERMISSION_CODES.TIMETABLE_APPROVE_WISHES);
   const canRegisterWishes = hasPermission(PERMISSION_CODES.TIMETABLE_REQUEST_BUSY);
   const canExportPersonal = hasPermission(PERMISSION_CODES.SEND_DOWNLOAD_PERSONAL);
-  const canViewAll = true;
+  const canViewAll = isAuthenticated;
+
+  const publishAdminSessionToken = useCallback(async (schoolId: string, adminUser: UserAccount, token: string) => {
+    const targetSchoolId = schoolId || DEFAULT_SCHOOL_ID;
+    const sessionDocRef = doc(db, 'schools', targetSchoolId, 'security', 'adminSession');
+    try {
+      await setDoc(sessionDocRef, {
+        sessionToken: token,
+        username: adminUser.username,
+        displayName: adminUser.displayName || 'Quản trị viên',
+        userId: adminUser.id,
+        loginAt: new Date().toISOString(),
+        updatedAt: serverTimestamp(),
+        deviceInfo: typeof navigator !== 'undefined' ? navigator.userAgent.slice(0, 140) : 'web'
+      });
+    } catch (err) {
+      console.warn('[Security] Failed to publish adminSession to Firestore:', err);
+    } finally {
+      if (pendingAdminTokenRef.current === token) {
+        pendingAdminTokenRef.current = null;
+      }
+    }
+  }, []);
 
   // Sync session storage
-  const setAuthSession = (user: UserAccount | null) => {
+  const setAuthSession = useCallback((user: UserAccount | null, explicitAdminToken?: string | null) => {
     if (user) {
       const normRole = normalizeRole(user.role);
       let displayName = user.displayName;
@@ -416,19 +469,162 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       };
       setCurrentUser(normalizedUser);
       setIsAdmin(normRole === 'ADMIN');
+      lastActivityRef.current = Date.now();
       try {
         sessionStorage.setItem(SESSION_AUTH_KEY, normRole);
         sessionStorage.setItem(SESSION_USER_KEY, JSON.stringify(normalizedUser));
+        if (normRole === 'ADMIN') {
+          if (explicitAdminToken) {
+            setAdminSessionToken(explicitAdminToken);
+            sessionStorage.setItem(SESSION_ADMIN_TOKEN_KEY, explicitAdminToken);
+          }
+        } else {
+          pendingAdminTokenRef.current = null;
+          setAdminSessionToken(null);
+          sessionStorage.removeItem(SESSION_ADMIN_TOKEN_KEY);
+        }
       } catch {}
     } else {
+      pendingAdminTokenRef.current = null;
       setCurrentUser(null);
       setIsAdmin(false);
+      setAdminSessionToken(null);
       try {
         sessionStorage.removeItem(SESSION_AUTH_KEY);
         sessionStorage.removeItem(SESSION_USER_KEY);
+        sessionStorage.removeItem(SESSION_ADMIN_TOKEN_KEY);
       } catch {}
     }
-  };
+  }, []);
+
+  const logout = useCallback((reason?: string, noticeType: 'warning' | 'info' | 'error' = 'warning') => {
+    setAuthSession(null);
+    setLoginModalOpen(false);
+    if (typeof reason === 'string' && reason.trim()) {
+      setAuthNotice({ type: noticeType, message: reason });
+    } else {
+      setAuthNotice(null);
+    }
+  }, [setAuthSession]);
+
+  // 3. Single Active Session cho Quản trị viên (ADMIN) qua onSnapshot tại /schools/{schoolId}/security/adminSession
+  useEffect(() => {
+    if (!isCurrentAdmin || !adminSessionToken) return;
+    const targetSchoolId = currentSchoolId || DEFAULT_SCHOOL_ID;
+    const sessionDocRef = doc(db, 'schools', targetSchoolId, 'security', 'adminSession');
+
+    const unsubscribe = onSnapshot(
+      sessionDocRef,
+      (snapshot) => {
+        if (!snapshot.exists()) return;
+        const data = snapshot.data();
+        const remoteToken = data?.sessionToken;
+        if (!remoteToken || typeof remoteToken !== 'string') return;
+
+        if (remoteToken === adminSessionToken) {
+          if (pendingAdminTokenRef.current === adminSessionToken) {
+            pendingAdminTokenRef.current = null;
+          }
+          return;
+        }
+
+        // Bỏ qua snapshot cũ trong lúc setDoc của chính phiên đăng nhập này đang gửi lên Firestore
+        if (pendingAdminTokenRef.current === adminSessionToken) {
+          return;
+        }
+
+        // Phát hiện thiết bị/trình duyệt khác vừa đăng nhập tài khoản ADMIN
+        logout('Tài khoản Quản trị viên đã được đăng nhập trên một thiết bị khác.', 'warning');
+      },
+      (err) => {
+        console.warn('[Security] Lỗi lắng nghe adminSession:', err);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [isCurrentAdmin, adminSessionToken, currentSchoolId, logout]);
+
+  // 4. Tự động khóa phiên khi không thao tác trong 30 phút (Idle Auto-Logout)
+  useEffect(() => {
+    if (!isAuthenticated || typeof window === 'undefined') return;
+
+    lastActivityRef.current = Date.now();
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let lastThrottleReset = Date.now();
+
+    const triggerIdleLogout = () => {
+      logout(
+        'Phiên làm việc đã tự động đăng xuất do không có thao tác trong 30 phút. Vui lòng đăng nhập lại để tiếp tục.',
+        'warning'
+      );
+    };
+
+    const scheduleTimer = () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      const elapsed = Date.now() - lastActivityRef.current;
+      const remaining = Math.max(0, IDLE_TIMEOUT_MS - elapsed);
+      timeoutId = setTimeout(() => {
+        if (Date.now() - lastActivityRef.current >= IDLE_TIMEOUT_MS) {
+          triggerIdleLogout();
+        } else {
+          scheduleTimer();
+        }
+      }, remaining);
+    };
+
+    const handleUserActivity = () => {
+      const now = Date.now();
+      // Nếu đã quá 30 phút (ví dụ máy vừa mở lại từ chế độ sleep) -> khóa ngay lập tức
+      if (now - lastActivityRef.current >= IDLE_TIMEOUT_MS) {
+        triggerIdleLogout();
+        return;
+      }
+      lastActivityRef.current = now;
+      if (now - lastThrottleReset >= 1000) {
+        lastThrottleReset = now;
+        scheduleTimer();
+      }
+    };
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        if (Date.now() - lastActivityRef.current >= IDLE_TIMEOUT_MS) {
+          triggerIdleLogout();
+        } else {
+          scheduleTimer();
+        }
+      }
+    };
+
+    scheduleTimer();
+
+    const activityEvents: Array<keyof WindowEventMap> = [
+      'mousemove',
+      'mousedown',
+      'keydown',
+      'touchstart',
+      'scroll',
+      'click',
+      'wheel'
+    ];
+    activityEvents.forEach(evt => window.addEventListener(evt, handleUserActivity, { passive: true }));
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+
+    const intervalId = setInterval(() => {
+      if (Date.now() - lastActivityRef.current >= IDLE_TIMEOUT_MS) {
+        triggerIdleLogout();
+      }
+    }, 15_000);
+
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      clearInterval(intervalId);
+      activityEvents.forEach(evt => window.removeEventListener(evt, handleUserActivity));
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+    };
+  }, [isAuthenticated, logout]);
 
   const getAdminPassword = (): string => {
     try {
@@ -445,33 +641,45 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const adminPass = getAdminPassword();
     const trimmedUser = (username || '').trim().toLowerCase();
 
-    // 1. Direct admin root password match (admin123 or custom)
-    if ((!trimmedUser || trimmedUser === 'admin') && (trimmedPass === adminPass || trimmedPass === DEFAULT_ADMIN_PASSWORD)) {
-      const adminAcc = usersList.find(u => normalizeRole(u.role) === 'ADMIN') || INITIAL_USERS[0];
-      setAuthSession({ ...adminAcc, role: 'ADMIN', isActive: true });
-      return { success: true, role: 'ADMIN', message: 'Đăng nhập thành công với vai trò Ban Giám Hiệu (Toàn quyền Admin)!' };
+    if (!trimmedUser) {
+      return { success: false, message: 'Vui lòng nhập Tên đăng nhập hoặc Email.' };
+    }
+    if (!trimmedPass) {
+      return { success: false, message: 'Vui lòng nhập Mật khẩu.' };
     }
 
-    // 2. Check accounts list from Firestore/localStorage
-    let foundUser: UserAccount | undefined;
-    if (trimmedUser) {
-      foundUser = usersList.find(u => u.username.toLowerCase() === trimmedUser);
-    } else {
-      foundUser = usersList.find(u => u.passwordHash === trimmedPass);
-    }
+    const startAdminSession = (adminUser: UserAccount) => {
+      const newToken = generateSessionToken();
+      pendingAdminTokenRef.current = newToken;
+      setAuthNotice(null);
+      setAuthSession({ ...adminUser, role: 'ADMIN', isActive: true }, newToken);
+      publishAdminSessionToken(currentSchoolId || DEFAULT_SCHOOL_ID, adminUser, newToken);
+    };
+
+    // 1. Check accounts list from Firestore/localStorage by username or email
+    const foundUser = usersList.find(u =>
+      u.username.toLowerCase() === trimmedUser ||
+      (u.email && u.email.toLowerCase() === trimmedUser)
+    );
 
     if (foundUser) {
-      // Check if account is locked
       if (foundUser.isActive === false) {
         return { success: false, message: 'Tài khoản này hiện đang bị tạm khóa. Vui lòng liên hệ Quản trị viên.' };
       }
 
-      if (foundUser.passwordHash === trimmedPass || (normalizeRole(foundUser.role) === 'ADMIN' && trimmedPass === adminPass)) {
-        const normRole = normalizeRole(foundUser.role);
+      const normRole = normalizeRole(foundUser.role);
+      const isPasswordValid =
+        foundUser.passwordHash === trimmedPass ||
+        (normRole === 'ADMIN' && !foundUser.passwordHash && trimmedPass === adminPass);
+
+      if (isPasswordValid) {
+        setAuthNotice(null);
+        if (normRole === 'ADMIN') {
+          startAdminSession(foundUser);
+          return { success: true, role: 'ADMIN', message: 'Đăng nhập thành công với vai trò Ban Giám Hiệu (Quản trị viên)!' };
+        }
         setAuthSession({ ...foundUser, role: normRole });
-        const roleDesc = normRole === 'ADMIN'
-          ? 'Ban Giám Hiệu (Toàn quyền Admin)'
-          : normRole === 'HEAD_OF_DEPARTMENT'
+        const roleDesc = normRole === 'HEAD_OF_DEPARTMENT'
           ? 'Tổ trưởng Chuyên môn'
           : 'Giáo viên Bộ môn';
         return { 
@@ -479,23 +687,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           role: normRole, 
           message: `Đăng nhập thành công với vai trò ${roleDesc}!` 
         };
-      } else {
-        return { success: false, message: 'Mật khẩu không chính xác.' };
       }
+      return { success: false, message: 'Tên đăng nhập / Email hoặc mật khẩu không chính xác.' };
     }
 
-    // Fallback: check admin password if username not found
-    if (trimmedPass === adminPass || trimmedPass === DEFAULT_ADMIN_PASSWORD) {
+    // 2. Fallback for root admin if remote accounts list hasn't included admin_root yet
+    if (trimmedUser === 'admin' && trimmedPass === adminPass) {
       const adminAcc = usersList.find(u => normalizeRole(u.role) === 'ADMIN') || INITIAL_USERS[0];
-      setAuthSession({ ...adminAcc, role: 'ADMIN', isActive: true });
-      return { success: true, role: 'ADMIN', message: 'Đăng nhập Ban Giám Hiệu (Admin) thành công!' };
+      startAdminSession(adminAcc);
+      return { success: true, role: 'ADMIN', message: 'Đăng nhập thành công với vai trò Ban Giám Hiệu (Quản trị viên)!' };
     }
 
-    return { success: false, message: 'Tên đăng nhập hoặc mật khẩu không chính xác.' };
-  };
-
-  const logout = () => {
-    setAuthSession(null);
+    return { success: false, message: 'Tên đăng nhập / Email hoặc mật khẩu không chính xác.' };
   };
 
   const changeAdminPassword = async (oldPass: string, newPass: string): Promise<{ success: boolean; message: string }> => {
@@ -923,10 +1126,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         user: currentUser,
         currentUser,
         role,
+        isAuthenticated,
         isAdmin: isCurrentAdmin,
         isHeadOfDepartment,
         isTeacher,
         isGuest,
+        hasPermission,
+        authNotice,
+        clearAuthNotice,
         canEdit,
         canEditSchoolData,
         canRunAI,
@@ -936,7 +1143,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         canRegisterWishes,
         canExportPersonal,
         canViewAll,
-        hasPermission,
         usersList,
         loginModalOpen,
         openLoginModal: () => setLoginModalOpen(true),

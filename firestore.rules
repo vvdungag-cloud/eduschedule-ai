@@ -20,6 +20,12 @@ service cloud.firestore {
         allow read: if true;
         allow write: if true;
       }
+
+      // Subcollection for security & single active session tracking (e.g. adminSession)
+      match /security/{securityDoc} {
+        allow read: if true;
+        allow write: if true;
+      }
     }
 
     // Default rule for other documents

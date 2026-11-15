@@ -26,6 +26,7 @@ import { UserManagementModal } from './components/UserManagementModal';
 import { UserGuideModal } from './components/UserGuideModal';
 import { SendScheduleModal } from './components/SendScheduleModal';
 import { AIAssistant } from './components/AIAssistant';
+import { LoginGateScreen } from './components/LoginGateScreen';
 import { useAuth } from './utils/authContext';
 import { ClassPeriodsEditor } from './components/ClassPeriodsEditor';
 import { 
@@ -887,6 +888,7 @@ export default function App() {
   const { 
     user,
     role,
+    isAuthenticated,
     isAdmin, 
     isHeadOfDepartment,
     isTeacher,
@@ -1657,8 +1659,9 @@ export default function App() {
     }
   }, [currentTermKey, currentAcademicYear, currentSemester]);
 
-  // 3. TỰ ĐỘNG TẢI DỮ LIỆU KHI KHỞI ĐỘNG TRÊN THIẾT BỊ MỚI (Fetch/Pull on Mount)
+  // 3. TỰ ĐỘNG TẢI DỮ LIỆU KHI KHỞI ĐỘNG (Chỉ tải và lắng nghe dữ liệu trường sau khi đăng nhập thành công)
   useEffect(() => {
+    if (!isAuthenticated) return;
     let isMounted = true;
 
     async function autoFetchFromCloudOnMount() {
@@ -1836,7 +1839,7 @@ export default function App() {
       unsub();
       window.removeEventListener('cloud-data-pulled', handleCustomPull);
     };
-  }, [currentTermKey, hydrateAppStatesFromCloudData]);
+  }, [currentTermKey, hydrateAppStatesFromCloudData, isAuthenticated]);
 
   // 4. HÀM CƯỠNG BỨC TẢI DỮ LIỆU TỪ CLOUD (Pull on Demand — luôn bỏ qua cache & nạp đè toàn bộ)
   const handleForcePullFromCloud = async () => {
@@ -2848,6 +2851,7 @@ export default function App() {
 
   // Phím tắt mở nhanh Hướng dẫn sử dụng: F1 hoặc '?'
   useEffect(() => {
+    if (!isAuthenticated) return;
     const handleGlobalHelpKey = (e: KeyboardEvent) => {
       if (e.key === 'F1') {
         e.preventDefault();
@@ -2861,11 +2865,24 @@ export default function App() {
     };
     window.addEventListener('keydown', handleGlobalHelpKey);
     return () => window.removeEventListener('keydown', handleGlobalHelpKey);
-  }, []);
+  }, [isAuthenticated]);
 
   const [isNlImportOpen, setIsNlImportOpen] = useState(false);
   const [nlImportType, setNlImportType] = useState<NlImportType>('teachers');
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+
+  // Tự động đóng toàn bộ modal đang mở khi phiên đăng nhập kết thúc / bị khóa
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setIsUserManagementModalOpen(false);
+      setIsSendScheduleModalOpen(false);
+      setIsExportModalOpen(false);
+      setIsUserGuideModalOpen(false);
+      setIsSettingsModalOpen(false);
+      setIsNlImportOpen(false);
+      setDeleteConfirmation(null);
+    }
+  }, [isAuthenticated]);
   const [restoreScope, setRestoreScope] = useState<'all' | 'current_year'>('all');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [schoolInfo, setSchoolInfo] = useState<SchoolInfo>(() => {
@@ -6906,6 +6923,16 @@ export default function App() {
     setIsExportModalOpen(true);
   };
 
+  if (!isAuthenticated) {
+    return (
+      <LoginGateScreen
+        customLogo={customLogo}
+        schoolName={schoolInfo?.schoolName}
+        departmentName={schoolInfo?.departmentName}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-800">
       
@@ -7206,46 +7233,14 @@ export default function App() {
 
                 <button
                   type="button"
-                  onClick={logout}
+                  onClick={() => logout('Bạn đã đăng xuất khỏi hệ thống.', 'info')}
                   className="text-white/70 hover:text-rose-300 transition cursor-pointer flex items-center gap-1 font-semibold text-xs whitespace-nowrap shrink-0"
                   title="Đăng xuất khỏi tài khoản"
                 >
                   <span>Đăng xuất</span>
                 </button>
               </div>
-            ) : (
-              <button
-                type="button"
-                onClick={openLoginModal}
-                style={{
-                  background: 'rgba(255, 255, 255, 0.08)',
-                  border: '1px solid rgba(52, 211, 153, 0.45)',
-                  borderRadius: '10px',
-                  padding: '7px 16px',
-                  fontSize: '13px',
-                  fontWeight: 700,
-                  color: '#ffffff',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '9px',
-                  cursor: 'pointer',
-                  transition: 'all 0.2s',
-                  backdropFilter: 'blur(12px)',
-                  WebkitBackdropFilter: 'blur(12px)'
-                }}
-                className="hover:bg-white/15 hover:border-[#34d399] hover:shadow-[0_0_12px_rgba(52,211,153,0.3)] active:scale-95 shadow-2xs"
-                title="Đăng nhập tài khoản (Admin, Tổ trưởng chuyên môn, Giáo viên)"
-              >
-                {/* Đèn LED xanh lá chỉ báo Online có hiệu ứng sóng xung nhịp (pulse animation) */}
-                <span className="relative flex h-2 w-2 shrink-0">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-[#22c55e] shadow-[0_0_6px_#22c55e]"></span>
-                </span>
-                <KeyRound className="w-3.5 h-3.5 shrink-0" style={{ color: '#6ee7b7' }} />
-                <span>Đăng nhập</span>
-                <span className="text-[10px] bg-white/20 text-emerald-100 px-1.5 py-0.5 rounded font-medium">Khách</span>
-              </button>
-            )}
+            ) : null}
           </div>
         </div>
       </header>
