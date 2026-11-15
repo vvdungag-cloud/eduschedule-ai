@@ -7384,11 +7384,10 @@ export default function App() {
         }}
       >
         <div 
-          className={`mx-auto px-2 md:px-3 flex items-center justify-center transition-all duration-200 overflow-x-auto no-scrollbar ${
-            isBoardFullscreen && activeTab === "board" ? "max-w-none px-2 md:px-4 justify-start" : "max-w-7xl"
+          className={`mx-auto flex items-center justify-start md:justify-center overflow-x-auto no-scrollbar w-full px-3 gap-2 transition-all duration-200 ${
+            isBoardFullscreen && activeTab === "board" ? "max-w-none md:px-4 md:justify-start" : "max-w-7xl"
           }`}
           style={{
-            overflowX: "auto",
             scrollbarWidth: "none",
             msOverflowStyle: "none",
             WebkitOverflowScrolling: "touch"
@@ -10886,10 +10885,14 @@ export default function App() {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 text-left">
                   {/* THẺ 1: TỔNG SỐ GIÁO VIÊN */}
-                  <div 
-                    onClick={() => setActiveTab('teachers')}
-                    className="group bg-white rounded-xl p-3.5 border border-slate-200/90 shadow-2xs hover:border-indigo-300 hover:shadow-md transition-all cursor-pointer relative overflow-hidden"
-                    title="Bấm để xem danh sách hồ sơ Giáo viên"
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('teachers');
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                    className="group w-full text-left bg-white rounded-xl p-3.5 border border-slate-200/90 shadow-2xs hover:border-indigo-300 hover:shadow-md active:scale-[0.98] touch-manipulation transition-all cursor-pointer relative overflow-hidden"
+                    title="Bấm để mở tab Giáo viên"
                   >
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-xs font-semibold text-slate-500 group-hover:text-indigo-600 transition-colors">
@@ -10905,16 +10908,21 @@ export default function App() {
                       </span>
                       <span className="text-xs font-bold text-slate-500">giáo viên</span>
                     </div>
-                    <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-slate-500">
+                    <div className="mt-1.5 flex items-center justify-between gap-1.5 text-[11px] text-slate-500">
                       <span className="font-medium">100% hồ sơ đầy đủ</span>
+                      <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-indigo-600 group-hover:translate-x-0.5 transition-all shrink-0" />
                     </div>
-                  </div>
+                  </button>
 
                   {/* THẺ 2: SỐ LỚP HỌC */}
-                  <div 
-                    onClick={() => setActiveTab('classes')}
-                    className="group bg-white rounded-xl p-3.5 border border-slate-200/90 shadow-2xs hover:border-emerald-300 hover:shadow-md transition-all cursor-pointer relative overflow-hidden"
-                    title="Bấm để xem danh sách Lớp học"
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('classes');
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                    className="group w-full text-left bg-white rounded-xl p-3.5 border border-slate-200/90 shadow-2xs hover:border-emerald-300 hover:shadow-md active:scale-[0.98] touch-manipulation transition-all cursor-pointer relative overflow-hidden"
+                    title="Bấm để mở tab Lớp học"
                   >
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-xs font-semibold text-slate-500 group-hover:text-emerald-600 transition-colors">
@@ -10930,18 +10938,21 @@ export default function App() {
                       </span>
                       <span className="text-xs font-bold text-slate-500">lớp học</span>
                     </div>
-                    <div className="mt-1.5 flex items-center gap-1 text-[10px] font-semibold text-slate-600">
-                      <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">
-                        {classes.filter(c => c.grade === '10').length} K10
-                      </span>
-                      <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">
-                        {classes.filter(c => c.grade === '11').length} K11
-                      </span>
-                      <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">
-                        {classes.filter(c => c.grade === '12').length} K12
-                      </span>
+                    <div className="mt-1.5 flex items-center justify-between gap-1 text-[10px] font-semibold text-slate-600">
+                      <div className="flex items-center gap-1">
+                        <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">
+                          {classes.filter(c => c.grade === '10').length} K10
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">
+                          {classes.filter(c => c.grade === '11').length} K11
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">
+                          {classes.filter(c => c.grade === '12').length} K12
+                        </span>
+                      </div>
+                      <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-emerald-600 group-hover:translate-x-0.5 transition-all shrink-0" />
                     </div>
-                  </div>
+                  </button>
 
                   {/* THẺ 3: TRẠNG THÁI TKB */}
                   <div 
