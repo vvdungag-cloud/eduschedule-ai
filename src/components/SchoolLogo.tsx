@@ -51,7 +51,7 @@ export const DEFAULT_SCHOOL_LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" 
   <circle cx="250" cy="250" r="148" fill="#FFFFFF" stroke="url(#goldGrad)" stroke-width="6" />
 
   <!-- DÒNG CHỮ TRÊN: TRƯỜNG THPT NGUYỄN BỈNH KHIÊM -->
-  <text font-family="'Inter', 'Arial', sans-serif" font-size="24.5" font-weight="900" fill="#FFFFFF" letter-spacing="2.6">
+  <text font-family="'Inter', 'Arial', sans-serif" font-size="24.5" font-weight="700" fill="#FFFFFF" letter-spacing="2.6">
     <textPath href="#upperArc" startOffset="50%" text-anchor="middle">
       TRƯỜNG THPT NGUYỄN BỈNH KHIÊM
     </textPath>

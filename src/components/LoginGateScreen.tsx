@@ -26,7 +26,7 @@ export const LoginGateScreen: React.FC<LoginGateScreenProps> = ({
     schoolName ||
     currentSchoolName ||
     'TRƯỜNG THPT NGUYỄN BỈNH KHIÊM'
-  ).toUpperCase();
+  ).normalize('NFC').toUpperCase();
 
   const resolvedDeptName = (
     departmentName ||
@@ -99,7 +99,7 @@ export const LoginGateScreen: React.FC<LoginGateScreenProps> = ({
             <p className="text-[10.5px] font-semibold tracking-widest text-emerald-300 uppercase">
               {resolvedDeptName}
             </p>
-            <h1 className="text-base sm:text-lg font-extrabold tracking-wide text-white mt-0.5 leading-snug">
+            <h1 className="font-sans text-base sm:text-lg font-bold tracking-wide text-white mt-0.5 pt-1 leading-normal">
               {resolvedSchoolName}
             </h1>
 

@@ -7097,16 +7097,15 @@ export default function App() {
                 <div 
                   style={{
                     fontSize: '11.5px',
-                    fontWeight: 700,
                     color: '#6ee7b7',
                     letterSpacing: '1px',
                     textTransform: 'uppercase',
-                    marginTop: '2px'
+                    marginTop: '1px'
                   }}
-                  className="hidden md:block truncate max-w-xs lg:max-w-sm tracking-wide" 
-                  title={schoolInfo.schoolName ? schoolInfo.schoolName.replace(/^TRƯỜNG\s+/, '') : 'THPT NGUYỄN BỈNH KHIÊM'}
+                  className="hidden md:block font-sans font-bold leading-normal pt-0.5 truncate max-w-xs lg:max-w-sm tracking-wide" 
+                  title={(schoolInfo.schoolName ? schoolInfo.schoolName.replace(/^TRƯỜNG\s+/, '') : 'THPT NGUYỄN BỈNH KHIÊM').normalize('NFC')}
                 >
-                  {schoolInfo.schoolName ? schoolInfo.schoolName.replace(/^TRƯỜNG\s+/, '') : 'THPT NGUYỄN BỈNH KHIÊM'}
+                  {(schoolInfo.schoolName ? schoolInfo.schoolName.replace(/^TRƯỜNG\s+/, '') : 'THPT NGUYỄN BỈNH KHIÊM').normalize('NFC')}
                 </div>
               </div>
             </div>
@@ -10815,9 +10814,8 @@ export default function App() {
                   <span>SỞ GIÁO DỤC VÀ ĐÀO TẠO AN GIANG</span>
                 </div>
                 <h1 
-                  className="text-xl sm:text-2xl md:text-3xl font-extrabold uppercase text-center leading-tight tracking-wider bg-gradient-to-r from-blue-900 via-indigo-800 to-blue-700 bg-clip-text text-transparent transition-all duration-300 drop-shadow-[0_2px_4px_rgba(30,58,138,0.12)]"
+                  className="font-sans text-xl sm:text-2xl md:text-3xl font-bold uppercase text-center leading-relaxed pt-1 tracking-wider bg-gradient-to-r from-blue-900 via-indigo-800 to-blue-700 bg-clip-text text-transparent transition-all duration-300 drop-shadow-[0_2px_4px_rgba(30,58,138,0.12)]"
                   style={{ 
-                    fontFamily: "'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
                     letterSpacing: '0.04em',
                     filter: 'drop-shadow(0 2px 4px rgba(30, 58, 138, 0.12))'
                   }}
