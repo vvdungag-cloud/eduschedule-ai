@@ -73,9 +73,13 @@ export const AdminAuthModal: React.FC<AdminAuthModalProps> = ({ onOpenUserManage
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showOldPassword, setShowOldPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   // Sub-account management state
   const [isAddingUser, setIsAddingUser] = useState(false);
+  const [showSubUserPassword, setShowSubUserPassword] = useState(false);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [userFormData, setUserFormData] = useState<{
     username: string;
@@ -152,6 +156,9 @@ export const AdminAuthModal: React.FC<AdminAuthModalProps> = ({ onOpenUserManage
       setOldPassword('');
       setNewPassword('');
       setConfirmPassword('');
+      setShowOldPassword(false);
+      setShowNewPassword(false);
+      setShowConfirmPassword(false);
     } else {
       setErrorMessage(res.message);
     }
@@ -724,6 +731,7 @@ export const AdminAuthModal: React.FC<AdminAuthModalProps> = ({ onOpenUserManage
                   type="button"
                   onClick={() => {
                     setEditingUserId(null);
+                    setShowSubUserPassword(false);
                     setUserFormData({
                       username: '',
                       displayName: '',
@@ -789,14 +797,25 @@ export const AdminAuthModal: React.FC<AdminAuthModalProps> = ({ onOpenUserManage
                   </div>
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">Mật khẩu khởi tạo *</label>
-                    <input
-                      type="password"
-                      required
-                      value={userFormData.passwordHash}
-                      onChange={e => setUserFormData({ ...userFormData, passwordHash: e.target.value })}
-                      placeholder="Nhập mật khẩu..."
-                      className="w-full p-2 border border-slate-300 rounded bg-white text-xs"
-                    />
+                    <div className="relative">
+                      <input
+                        type={showSubUserPassword ? 'text' : 'password'}
+                        required
+                        value={userFormData.passwordHash}
+                        onChange={e => setUserFormData({ ...userFormData, passwordHash: e.target.value })}
+                        placeholder="Nhập mật khẩu..."
+                        className="w-full p-2 pr-10 border border-slate-300 rounded bg-white text-xs"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowSubUserPassword(p => !p)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                        aria-label={showSubUserPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                        title={showSubUserPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                      >
+                        {showSubUserPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -806,6 +825,7 @@ export const AdminAuthModal: React.FC<AdminAuthModalProps> = ({ onOpenUserManage
                     onClick={() => {
                       setIsAddingUser(false);
                       setEditingUserId(null);
+                      setShowSubUserPassword(false);
                     }}
                     className="px-3 py-1.5 border border-slate-300 rounded text-slate-700 font-semibold text-xs cursor-pointer"
                   >
@@ -850,6 +870,7 @@ export const AdminAuthModal: React.FC<AdminAuthModalProps> = ({ onOpenUserManage
                         type="button"
                         onClick={() => {
                           setEditingUserId(u.id);
+                          setShowSubUserPassword(false);
                           setUserFormData({
                             username: u.username,
                             displayName: u.displayName,
@@ -894,38 +915,71 @@ export const AdminAuthModal: React.FC<AdminAuthModalProps> = ({ onOpenUserManage
             <form onSubmit={handleChangePasswordSubmit} className="space-y-3">
               <div>
                 <label className="block font-bold text-slate-700 mb-1">Mật khẩu hiện tại *</label>
-                <input
-                  type="password"
-                  required
-                  value={oldPassword}
-                  onChange={e => setOldPassword(e.target.value)}
-                  placeholder="Nhập mật khẩu hiện tại..."
-                  className="w-full p-2.5 border border-slate-300 rounded-lg text-xs"
-                />
+                <div className="relative">
+                  <input
+                    type={showOldPassword ? 'text' : 'password'}
+                    required
+                    value={oldPassword}
+                    onChange={e => setOldPassword(e.target.value)}
+                    placeholder="Nhập mật khẩu hiện tại..."
+                    className="w-full p-2.5 pr-10 border border-slate-300 rounded-lg text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowOldPassword(p => !p)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    aria-label={showOldPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                    title={showOldPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                  >
+                    {showOldPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
 
               <div>
                 <label className="block font-bold text-slate-700 mb-1">Mật khẩu mới *</label>
-                <input
-                  type="password"
-                  required
-                  value={newPassword}
-                  onChange={e => setNewPassword(e.target.value)}
-                  placeholder="Nhập mật khẩu mới..."
-                  className="w-full p-2.5 border border-slate-300 rounded-lg text-xs"
-                />
+                <div className="relative">
+                  <input
+                    type={showNewPassword ? 'text' : 'password'}
+                    required
+                    value={newPassword}
+                    onChange={e => setNewPassword(e.target.value)}
+                    placeholder="Nhập mật khẩu mới..."
+                    className="w-full p-2.5 pr-10 border border-slate-300 rounded-lg text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewPassword(p => !p)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    aria-label={showNewPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                    title={showNewPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                  >
+                    {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
 
               <div>
                 <label className="block font-bold text-slate-700 mb-1">Xác nhận mật khẩu mới *</label>
-                <input
-                  type="password"
-                  required
-                  value={confirmPassword}
-                  onChange={e => setConfirmPassword(e.target.value)}
-                  placeholder="Nhập lại mật khẩu mới..."
-                  className="w-full p-2.5 border border-slate-300 rounded-lg text-xs"
-                />
+                <div className="relative">
+                  <input
+                    type={showConfirmPassword ? 'text' : 'password'}
+                    required
+                    value={confirmPassword}
+                    onChange={e => setConfirmPassword(e.target.value)}
+                    placeholder="Nhập lại mật khẩu mới..."
+                    className="w-full p-2.5 pr-10 border border-slate-300 rounded-lg text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(p => !p)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    aria-label={showConfirmPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                    title={showConfirmPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                  >
+                    {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
 
               <div className="pt-2 flex justify-end gap-2">
